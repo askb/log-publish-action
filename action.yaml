@@ -1,0 +1,180 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# log-publish-action
+name: '🪵 Publish Build Logs'
+
+description: 'Publishes build logs and test reports to an S3 log server'
+# Replicates the Jenkins/JJB post-build log shipping behaviour
+# (global-jjb lf-infra-publish -> logs-deploy.sh -> lftools deploy s3)
+# for GitHub Actions, writing to the same bucket layout so the existing
+# server side directory index generation keeps working unchanged.
+
+inputs:
+  # Mandatory
+  s3_bucket:
+    description: 'Target S3 bucket name'
+    required: true
+
+  # Path construction
+  s3_path:
+    description: >-
+      Full path within the bucket. Overrides the derived path. Must be at
+      least three segments deep, since the first three receive the index
+      marker that refreshes directory listings.
+    required: false
+    default: ''
+  path_prefix:
+    description: 'Top level prefix within the bucket'
+    required: false
+    default: 'logs'
+  namespace:
+    description: >-
+      Second path element, analogous to the Jenkins silo. Keeps GitHub
+      Actions output separate from the Jenkins hierarchy.
+    required: false
+    default: 'gha'
+  job_name:
+    description: >-
+      Job identifier used in the path. Defaults to the GitHub job id.
+      Set this to a matrix unique value; without it, parallel matrix legs
+      overwrite each other.
+    required: false
+    default: ''
+
+  # Content selection
+  workspace:
+    description: 'Directory to collect files from'
+    required: false
+    default: ''
+  archive_dir:
+    description: >-
+      Directory below the workspace whose contents are always collected,
+      matching the Jenkins $WORKSPACE/archives convention.
+    required: false
+    default: 'archives'
+  archive_patterns:
+    description: >-
+      Newline separated glob patterns, relative to the workspace, naming
+      additional files to collect. Equivalent to ARCHIVE_ARTIFACTS in JJB.
+    required: false
+    default: ''
+  capture_console:
+    description: >-
+      Fetch the console log of every job in this workflow run through the
+      GitHub REST API. Requires github_token and actions:read permission.
+      A job cannot read its own log while running, so enable this only in
+      a dedicated final job.
+    required: false
+    default: 'false'
+  include_sysinfo:
+    description: 'Write a _sys-info.log describing the runner'
+    required: false
+    default: 'true'
+
+  # Upload behaviour
+  compress:
+    description: 'Compress text content before upload'
+    required: false
+    default: 'true'
+  compress_suffix:
+    description: >-
+      Append a .gz extension to compressed files, reproducing the legacy
+      Jenkins naming. Off by default because renaming breaks relative
+      links inside multi file reports such as Allure or Robot Framework.
+    required: false
+    default: 'false'
+  index_markers:
+    description: >-
+      Upload and then remove a marker object in each of the first three
+      path segments, triggering server side regeneration of index.html.
+    required: false
+    default: 'true'
+  base_url:
+    description: 'Public base URL of the log server, used to build log_url'
+    required: false
+    default: ''
+  aws_region:
+    description: 'AWS region of the bucket'
+    required: false
+    default: 'us-east-1'
+  github_token:
+    description: 'Token used when capture_console is enabled'
+    required: false
+    default: ''
+  dry_run:
+    description: >-
+      Collect, compress and build the manifest, but perform no S3 calls.
+      Used by the test suite and for local verification.
+    required: false
+    default: 'false'
+  permit_fail:
+    description: >-
+      Do not fail the step when publishing fails. Defaults true because
+      losing logs should not mask the result of the build that produced
+      them.
+    required: false
+    default: 'true'
+
+outputs:
+  s3_path:
+    description: 'Resolved path within the bucket'
+    value: "${{ steps.publish.outputs.s3_path }}"
+  log_url:
+    description: 'Public URL of the published directory'
+    value: "${{ steps.publish.outputs.log_url }}"
+  file_count:
+    description: 'Number of files collected'
+    value: "${{ steps.publish.outputs.file_count }}"
+  upload_count:
+    description: 'Number of files uploaded successfully'
+    value: "${{ steps.publish.outputs.upload_count }}"
+  failed_count:
+    description: 'Number of files that failed to upload'
+    value: "${{ steps.publish.outputs.failed_count }}"
+  manifest_path:
+    description: 'Path to the generated upload manifest'
+    value: "${{ steps.publish.outputs.manifest_path }}"
+
+runs:
+  using: 'composite'
+  steps:
+    - name: 'Validate inputs'
+      id: validate
+      shell: bash
+      env:
+        INPUT_S3_BUCKET: "${{ inputs.s3_bucket }}"
+        INPUT_S3_PATH: "${{ inputs.s3_path }}"
+        INPUT_PATH_PREFIX: "${{ inputs.path_prefix }}"
+        INPUT_NAMESPACE: "${{ inputs.namespace }}"
+        INPUT_CAPTURE_CONSOLE: "${{ inputs.capture_console }}"
+        INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
+        INPUT_DRY_RUN: "${{ inputs.dry_run }}"
+      run: |
+        bash "$GITHUB_ACTION_PATH/scripts/validate.sh"
+
+    - name: 'Publish logs to S3'
+      id: publish
+      shell: bash
+      env:
+        INPUT_S3_BUCKET: "${{ inputs.s3_bucket }}"
+        INPUT_S3_PATH: "${{ inputs.s3_path }}"
+        INPUT_PATH_PREFIX: "${{ inputs.path_prefix }}"
+        INPUT_NAMESPACE: "${{ inputs.namespace }}"
+        INPUT_JOB_NAME: "${{ inputs.job_name }}"
+        INPUT_WORKSPACE: "${{ inputs.workspace }}"
+        INPUT_ARCHIVE_DIR: "${{ inputs.archive_dir }}"
+        INPUT_ARCHIVE_PATTERNS: "${{ inputs.archive_patterns }}"
+        INPUT_CAPTURE_CONSOLE: "${{ inputs.capture_console }}"
+        INPUT_INCLUDE_SYSINFO: "${{ inputs.include_sysinfo }}"
+        INPUT_COMPRESS: "${{ inputs.compress }}"
+        INPUT_COMPRESS_SUFFIX: "${{ inputs.compress_suffix }}"
+        INPUT_INDEX_MARKERS: "${{ inputs.index_markers }}"
+        INPUT_BASE_URL: "${{ inputs.base_url }}"
+        INPUT_AWS_REGION: "${{ inputs.aws_region }}"
+        INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
+        INPUT_DRY_RUN: "${{ inputs.dry_run }}"
+        INPUT_PERMIT_FAIL: "${{ inputs.permit_fail }}"
+      run: |
+        bash "$GITHUB_ACTION_PATH/scripts/publish-logs.sh"

@@ -1,0 +1,186 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# Action test/validation workflow
+name: "Test GitHub Action 🧪"
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  ### Shell test suite ###
+  # Runs entirely offline against dry_run, so it needs no AWS
+  # credentials and no network egress.
+  shell-tests:
+    name: "Shell test suite"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: "Checkout repository"
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: "Shellcheck"
+        shell: bash
+        run: |
+          # Shellcheck
+          shellcheck -x scripts/*.sh tests/*.sh
+          echo "Shellcheck clean ✅" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Run test suite"
+        shell: bash
+        run: |
+          # Run test suite
+          bash tests/run-tests.sh | tee /tmp/test-output.txt
+          {
+            echo '### Shell test suite'
+            echo '```text'
+            tail -5 /tmp/test-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  ### Test the GitHub Action in this Repository ###
+  tests:
+    name: "Test local GitHub Action"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: "Checkout repository"
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      # Perform setup prior to running test(s)
+      - name: "Testing setup step"
+        shell: bash
+        run: |
+          # Build a workspace resembling a real Maven/Karaf build
+          mkdir -p archives/robot-plugin
+          mkdir -p target/SFT
+          mkdir -p target/surefire-reports
+          echo "karaf started" > target/SFT/karaf.log
+          echo "<testsuite/>" > target/surefire-reports/TEST-a.xml
+          echo "<html><body>report</body></html>" \
+            > archives/robot-plugin/report.html
+          echo "build summary" > archives/summary.txt
+          echo "Testing setup complete 💬" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Running local action: ${{ github.repository }}"
+        id: publish
+        uses: ./
+        with:
+          s3_bucket: "logs-example-org"
+          namespace: "gha-test"
+          base_url: "https://logs.example.org"
+          archive_patterns: |
+            target/SFT/**
+            target/surefire-reports/*.xml
+          dry_run: true
+
+      - name: "Validated local action: ${{ github.repository }}"
+        shell: bash
+        env:
+          S3_PATH: "${{ steps.publish.outputs.s3_path }}"
+          LOG_URL: "${{ steps.publish.outputs.log_url }}"
+          FILE_COUNT: "${{ steps.publish.outputs.file_count }}"
+        run: |
+          # Local action validation
+          set -euo pipefail
+          fail=0
+
+          if [ -z "$S3_PATH" ]; then
+            echo "Error: s3_path output is empty ❌"
+            fail=1
+          fi
+          if [ -z "$LOG_URL" ]; then
+            echo "Error: log_url output is empty ❌"
+            fail=1
+          fi
+          # archives/* plus both glob patterns plus generated metadata
+          if [ "${FILE_COUNT:-0}" -lt 4 ]; then
+            echo "Error: expected at least 4 files, got '$FILE_COUNT' ❌"
+            fail=1
+          fi
+          case "$S3_PATH" in
+            logs/gha-test/*) ;;
+            *)
+              echo "Error: unexpected s3_path '$S3_PATH' ❌"
+              fail=1
+              ;;
+          esac
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "Validated local action: ${{ github.repository }} ✅"
+          {
+            echo "### Action outputs"
+            echo "- s3_path: \`$S3_PATH\`"
+            echo "- log_url: $LOG_URL"
+            echo "- file_count: $FILE_COUNT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Publishing must never mask the result of the build that produced
+      # the logs, so an unreachable bucket is tolerated by default.
+      - name: "Running local action: permit_fail tolerates upload errors"
+        id: tolerated
+        uses: ./
+        with:
+          s3_bucket: "logs-example-org"
+          namespace: "gha-test"
+          archive_patterns: "target/SFT/**"
+          dry_run: true
+          permit_fail: true
+
+      - name: "Error if tolerated step did NOT succeed"
+        if: steps.tolerated.outcome != 'success'
+        shell: bash
+        run: |
+          # Error if tolerated step did NOT succeed
+          echo "Error: permit_fail did not tolerate the failure ❌"
+          exit 1
+
+      # yamllint disable-line rule:line-length
+      - name: "Running local action: ${{ github.repository }} [Override Failure]"
+        uses: ./
+        id: failure
+        continue-on-error: true
+        with:
+          s3_bucket: "Invalid_Bucket_Name!"
+          dry_run: true
+
+      # Failure testing is also important
+      - name: "Error if step above did NOT fail"
+        if: steps.failure.outcome == 'success'
+        shell: bash
+        run: |
+          # Error if step above did NOT fail
+          echo "Error: previous test step did NOT fail ❌"
+          exit 1
