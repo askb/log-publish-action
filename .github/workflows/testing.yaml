@@ -147,6 +147,51 @@ jobs:
             echo "- file_count: $FILE_COUNT"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # The artifact destination is the fallback if the S3 log server is
+      # ever retired, so it must work with no bucket and no credentials.
+      # This is also the only path that cannot be covered offline, since
+      # it really invokes actions/upload-artifact.
+      - name: "Running local action: artifact destination"
+        id: artifact
+        uses: ./
+        with:
+          destination: "artifact"
+          artifact_name: "test-build-logs"
+          artifact_retention_days: "1"
+          archive_patterns: |
+            target/SFT/**
+            target/surefire-reports/*.xml
+
+      - name: "Verify artifact destination behaviour"
+        shell: bash
+        env:
+          FILE_COUNT: "${{ steps.artifact.outputs.file_count }}"
+          ARTIFACT_NAME: "${{ steps.artifact.outputs.artifact_name }}"
+          STAGING_DIR: "${{ steps.artifact.outputs.staging_dir }}"
+          LOG_URL: "${{ steps.artifact.outputs.log_url }}"
+        run: |
+          # Verify artifact destination behaviour
+          set -euo pipefail
+          if [ "${FILE_COUNT:-0}" -lt 1 ]; then
+            echo "Error: artifact run collected no files ❌"
+            exit 1
+          fi
+          if [ "$ARTIFACT_NAME" != 'test-build-logs' ]; then
+            echo "Error: artifact_name was '$ARTIFACT_NAME' ❌"
+            exit 1
+          fi
+          # Nothing went to S3, so there can be no log URL.
+          if [ -n "$LOG_URL" ]; then
+            echo "Error: artifact run produced an S3 URL '$LOG_URL' ❌"
+            exit 1
+          fi
+          # The cleanup step owns the staged tree once upload completes.
+          if [ -e "$STAGING_DIR" ]; then
+            echo "Error: staged tree survived at '$STAGING_DIR' ❌"
+            exit 1
+          fi
+          echo "Artifact destination verified: ${FILE_COUNT} file(s) ✅"
+
       # Publishing must never mask the result of the build that produced
       # the logs, so an unreachable bucket is tolerated by default.
       - name: "Running local action: permit_fail tolerates upload errors"

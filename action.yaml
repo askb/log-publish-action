@@ -5,17 +5,37 @@
 # log-publish-action
 name: '🪵 Publish Build Logs'
 
-description: 'Publishes build logs and test reports to an S3 log server'
+description: >-
+  Publishes build logs and test reports to an S3 log server, to GitHub
+  workflow artifacts, or to both
 # Replicates the Jenkins/JJB post-build log shipping behaviour
 # (global-jjb lf-infra-publish -> logs-deploy.sh -> lftools deploy s3)
 # for GitHub Actions, writing to the same bucket layout so the existing
 # server side directory index generation keeps working unchanged.
+#
+# Collection, console capture, metadata generation and compression are
+# independent of where the result lands, so the same pipeline feeds the
+# artifact destination. That keeps the action usable unchanged if the S3
+# log server is ever retired.
 
 inputs:
-  # Mandatory
+  # Destination
+  destination:
+    description: >-
+      Where to publish: s3, artifact, or both. S3 gives anonymously
+      readable URLs and server rendered HTML reports. Artifacts are free
+      but require a GitHub login to download, even on public repos, and
+      arrive as a single zip. Drive this from an organisation variable so
+      a fleet wide move needs one change rather than one per repository.
+    required: false
+    default: 's3'
+
+  # Mandatory for the s3 and both destinations
   s3_bucket:
-    description: 'Target S3 bucket name'
-    required: true
+    description: >-
+      Target S3 bucket name. Required unless destination is artifact.
+    required: false
+    default: ''
 
   # Path construction
   s3_path:
@@ -99,6 +119,25 @@ inputs:
     description: 'AWS region of the bucket'
     required: false
     default: 'us-east-1'
+
+  # Artifact destination
+  artifact_name:
+    description: >-
+      Name of the uploaded workflow artifact. Must be unique within the
+      run, so set this per matrix leg when a matrix publishes logs.
+    required: false
+    default: 'build-logs'
+  artifact_retention_days:
+    description: >-
+      Retention in days. Empty uses the repository default. Public repos
+      allow 1 to 90; the S3 lifecycle currently keeps objects for 180.
+    required: false
+    default: ''
+  artifact_if_no_files_found:
+    description: 'Behaviour when nothing was collected: warn, error, ignore'
+    required: false
+    default: 'warn'
+
   github_token:
     description: 'Token used when capture_console is enabled'
     required: false
@@ -136,6 +175,14 @@ outputs:
   manifest_path:
     description: 'Path to the generated upload manifest'
     value: "${{ steps.publish.outputs.manifest_path }}"
+  staging_dir:
+    description: >-
+      Directory holding the staged tree. Populated when the artifact
+      destination is in use, or after a dry run, and empty otherwise.
+    value: "${{ steps.publish.outputs.staging_dir }}"
+  artifact_name:
+    description: 'Name of the uploaded artifact, empty when none was uploaded'
+    value: "${{ steps.publish.outputs.artifact_name }}"
 
 runs:
   using: 'composite'
@@ -144,6 +191,7 @@ runs:
       id: validate
       shell: bash
       env:
+        INPUT_DESTINATION: "${{ inputs.destination }}"
         INPUT_S3_BUCKET: "${{ inputs.s3_bucket }}"
         INPUT_S3_PATH: "${{ inputs.s3_path }}"
         INPUT_PATH_PREFIX: "${{ inputs.path_prefix }}"
@@ -154,10 +202,11 @@ runs:
       run: |
         bash "$GITHUB_ACTION_PATH/scripts/validate.sh"
 
-    - name: 'Publish logs to S3'
+    - name: 'Collect and publish logs'
       id: publish
       shell: bash
       env:
+        INPUT_DESTINATION: "${{ inputs.destination }}"
         INPUT_S3_BUCKET: "${{ inputs.s3_bucket }}"
         INPUT_S3_PATH: "${{ inputs.s3_path }}"
         INPUT_PATH_PREFIX: "${{ inputs.path_prefix }}"
@@ -173,8 +222,39 @@ runs:
         INPUT_INDEX_MARKERS: "${{ inputs.index_markers }}"
         INPUT_BASE_URL: "${{ inputs.base_url }}"
         INPUT_AWS_REGION: "${{ inputs.aws_region }}"
+        INPUT_ARTIFACT_NAME: "${{ inputs.artifact_name }}"
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
         INPUT_PERMIT_FAIL: "${{ inputs.permit_fail }}"
       run: |
         bash "$GITHUB_ACTION_PATH/scripts/publish-logs.sh"
+
+    # Runs whenever the staged tree survived, which the script arranges
+    # for the artifact and both destinations. Guarded on the path rather
+    # than the destination alone so a collection failure cannot turn into
+    # a confusing upload-artifact error.
+    - name: 'Upload logs as workflow artifact'
+      if: >-
+        ${{ (inputs.destination == 'artifact' || inputs.destination == 'both')
+        && inputs.dry_run != 'true'
+        && steps.publish.outputs.staging_dir != '' }}
+      # yamllint disable-line rule:line-length
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: "${{ inputs.artifact_name }}"
+        path: "${{ steps.publish.outputs.staging_dir }}"
+        retention-days: "${{ inputs.artifact_retention_days }}"
+        if-no-files-found: "${{ inputs.artifact_if_no_files_found }}"
+
+    # The script hands ownership of the staged tree to the step above, so
+    # it cannot clean up after itself. Always, so a failed upload still
+    # leaves no temporary data on a self hosted runner.
+    - name: 'Remove staged tree'
+      if: >-
+        ${{ always() && inputs.dry_run != 'true'
+        && steps.publish.outputs.staging_dir != '' }}
+      shell: bash
+      env:
+        STAGING_DIR: "${{ steps.publish.outputs.staging_dir }}"
+      run: |
+        rm -rf "$STAGING_DIR" 2> /dev/null || true

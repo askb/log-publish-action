@@ -131,6 +131,25 @@ run_publish_clean() {
     printf '%s' "$output"
 }
 
+# Capture what the script wrote to GITHUB_OUTPUT rather than stdout.
+# Needed for the artifact destination, whose whole contract is the
+# staging_dir output consumed by the upload step.
+run_publish_outputs() {
+    local ws="$1"
+    shift
+    local out_file result
+    out_file="$(mktemp -t lpa-ghout.XXXXXXXX)"
+    run_publish "$ws" "GITHUB_OUTPUT=$out_file" "$@" > /dev/null 2>&1
+    result="$(cat "$out_file")"
+    rm -f "$out_file"
+    printf '%s' "$result"
+}
+
+# Read one key from a captured GITHUB_OUTPUT block.
+output_field() {
+    printf '%s' "$1" | sed -n "s/^${2}=//p" | head -1
+}
+
 # Extract one manifest column for a staged path.
 manifest_field() {
     local output="$1" rel="$2" col="$3"
@@ -380,6 +399,82 @@ assert_eq "$(manifest_field "$out" 'allure-report/data/suites.json' 2)" \
     'allure-report/data/suites.json.gz' \
     'legacy suffix mode renames the linked asset (documented hazard)'
 staged="$(printf '%s' "$out" | sed -n 's/^staging-dir: //p' | head -1)"
+[ -n "$staged" ] && rm -rf "$staged"
+
+rm -rf "$ws"
+
+# ---------------------------------------------------------------------------
+echo
+echo '▶ Destination routing'
+# ---------------------------------------------------------------------------
+ws="$(make_workspace)"
+
+out="$(INPUT_S3_BUCKET='logs-example-org' INPUT_DESTINATION='ftp' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'destination must be s3, artifact or both' \
+    'unknown destination is rejected'
+
+# The point of the artifact destination is that it needs no S3 at all:
+# no bucket, no credentials, no CLI.
+out="$(INPUT_S3_BUCKET='' INPUT_DESTINATION='artifact' \
+    INPUT_DRY_RUN='false' bash "$VALIDATE" 2>&1)"
+assert_contains "$out" 'validated' 'artifact destination needs no bucket'
+
+out="$(INPUT_S3_BUCKET='' INPUT_DESTINATION='both' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 's3_bucket is required' \
+    'both destination still requires a bucket'
+
+out="$(INPUT_S3_BUCKET='' INPUT_DESTINATION='s3' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 's3_bucket is required' \
+    'default destination still requires a bucket'
+
+# The three segment rule exists only to place S3 index markers, so it
+# must not constrain an artifact only run.
+out="$(INPUT_S3_BUCKET='' INPUT_DESTINATION='artifact' \
+    INPUT_S3_PATH='shallow' INPUT_DRY_RUN='false' bash "$VALIDATE" 2>&1)"
+assert_contains "$out" 'validated' \
+    'artifact destination ignores the path depth rule'
+
+# A real (non dry) artifact run must complete offline and leave the tree
+# behind for the upload step.
+outputs="$(run_publish_outputs "$ws" 'INPUT_DESTINATION=artifact' \
+    'INPUT_DRY_RUN=false')"
+staged="$(output_field "$outputs" 'staging_dir')"
+assert_not_contains "$outputs" 'failed_count=1' \
+    'artifact run reports no upload failures'
+assert_eq "$(output_field "$outputs" 'artifact_name')" 'build-logs' \
+    'artifact run reports the artifact name'
+if [ -n "$staged" ] && [ -d "$staged" ]; then
+    ok 'artifact run retains the staged tree for upload'
+else
+    ko 'artifact run retains the staged tree for upload' \
+        "staging_dir='${staged}'"
+fi
+if [ -n "$staged" ] && [ -f "${staged}/karaf.log" ]; then
+    ok 'retained tree holds the collected content'
+else
+    ko 'retained tree holds the collected content' 'karaf.log missing'
+fi
+# The composite step owns this cleanup in production.
+[ -n "$staged" ] && rm -rf "$staged"
+
+# A custom artifact name must reach the output the upload step reads.
+outputs="$(run_publish_outputs "$ws" 'INPUT_DESTINATION=artifact' \
+    'INPUT_DRY_RUN=false' 'INPUT_ARTIFACT_NAME=logs-jdk21')"
+assert_eq "$(output_field "$outputs" 'artifact_name')" 'logs-jdk21' \
+    'custom artifact name is honoured'
+staged="$(output_field "$outputs" 'staging_dir')"
+[ -n "$staged" ] && rm -rf "$staged"
+
+# Pure S3 mode must not retain anything, or the cleanup step would fire
+# against a path that no longer exists.
+outputs="$(run_publish_outputs "$ws" 'INPUT_DESTINATION=s3' \
+    'INPUT_DRY_RUN=true')"
+assert_eq "$(output_field "$outputs" 'artifact_name')" '' \
+    's3 destination reports no artifact name'
+staged="$(output_field "$outputs" 'staging_dir')"
 [ -n "$staged" ] && rm -rf "$staged"
 
 rm -rf "$ws"

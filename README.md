@@ -5,7 +5,8 @@
 
 # 🪵 Log Publishing Action
 
-Publishes build logs and test reports to an S3 log server.
+Publishes build logs and test reports to an S3 log server, to GitHub
+workflow artifacts, or to both.
 
 ## log-publish-action
 
@@ -38,6 +39,9 @@ output — become durable, linkable URLs.
   changes the result of the build that produced them
 - **Offline Testable**: `dry_run` exercises the whole pipeline with no AWS
   credentials and no network access
+- **Destination Agnostic**: Collection, console capture, metadata and
+  compression are independent of where the result lands, so the same
+  pipeline feeds S3, workflow artifacts, or both
 
 ## Usage Examples
 
@@ -54,6 +58,20 @@ Collect `archives/` and publish it, whatever the build result:
   with:
     s3_bucket: "logs.example.org"
     base_url: "https://logs.example.org"
+```
+
+### Workflow artifacts instead of S3
+
+This needs no bucket, no credentials and no AWS CLI:
+
+```yaml
+- name: "Publish build logs"
+  if: always()
+  uses: lfreleng-actions/log-publish-action@main
+  with:
+    destination: "artifact"
+    artifact_name: "build-logs"
+    artifact_retention_days: "30"
 ```
 
 ### Maven build with test artifacts
@@ -136,41 +154,83 @@ publish-logs:
 
 <!-- markdownlint-enable MD013 -->
 
+## Choosing a Destination
+
+<!-- markdownlint-disable MD013 -->
+
+|                     | `s3`                             | `artifact`                                             |
+| ------------------- | -------------------------------- | ------------------------------------------------------ |
+| Anonymous access    | Yes                              | **No** — requires a GitHub login, even on public repos |
+| HTML reports        | Rendered in the browser          | Zip download; unpack Allure and Robot first            |
+| Retention           | Bucket lifecycle, today 180 days | 1–90 days on public repos                              |
+| Stable per-file URL | Yes                              | No — artifact IDs change every run                     |
+| Cost                | Storage plus egress              | Free for public repositories                           |
+
+<!-- markdownlint-enable MD013 -->
+
+Use `s3` when a link has to work for someone who is not signed in: a bug
+report, a mailing list thread, or a dashboard pointing at trend history.
+Use `artifact` for bulk content that maintainers alone open, where a login
+costs nothing. `both` writes the same set to each.
+
+### Driving the choice from an organisation variable
+
+Pin the destination at the workflow layer rather than in each repository.
+One organisation variable then moves an entire fleet, with no action
+release and no change to any calling repository:
+
+```yaml
+- uses: lfreleng-actions/log-publish-action@v1
+  with:
+    destination: ${{ vars.LOG_PUBLISH_DESTINATION || 's3' }}
+    s3_bucket: ${{ vars.LOG_S3_BUCKET }}
+```
+
+That matters because the log server is infrastructure. Should it retire
+on cost grounds, the collection, console capture, metadata and
+compression stages all keep working; the hand-off alone moves.
+
 ## Inputs
 
 <!-- markdownlint-disable MD013 -->
 
-| Input              | Required | Default             | Description                                                |
-| ------------------ | -------- | ------------------- | ---------------------------------------------------------- |
-| `s3_bucket`        | **Yes**  |                     | Target S3 bucket name                                      |
-| `s3_path`          | No       |                     | Full path in the bucket; overrides the derived path        |
-| `path_prefix`      | No       | `logs`              | Top-level prefix within the bucket                         |
-| `namespace`        | No       | `gha`               | Second path element, analogous to the Jenkins silo         |
-| `job_name`         | No       | `$GITHUB_JOB`       | Job identifier in the path; set per matrix leg             |
-| `workspace`        | No       | `$GITHUB_WORKSPACE` | Directory to collect files from                            |
-| `archive_dir`      | No       | `archives`          | Directory below the workspace always collected             |
-| `archive_patterns` | No       |                     | Newline-separated globs, relative to the workspace         |
-| `capture_console`  | No       | `false`             | Fetch job console logs through the REST API                |
-| `include_sysinfo`  | No       | `true`              | Write a `_sys-info.log` describing the runner              |
-| `compress`         | No       | `true`              | Compress text content before upload                        |
-| `compress_suffix`  | No       | `false`             | Append `.gz` to compressed files (legacy Jenkins naming)   |
-| `index_markers`    | No       | `true`              | Trigger server-side regeneration of `index.html`           |
-| `base_url`         | No       |                     | Public base URL of the log server, used to build `log_url` |
-| `aws_region`       | No       | `us-east-1`         | AWS region of the bucket                                   |
-| `github_token`     | No       |                     | Token for `capture_console`                                |
-| `dry_run`          | No       | `false`             | Collect and build the manifest, but make no S3 calls       |
-| `permit_fail`      | No       | `true`              | Do not fail the step when publishing fails                 |
+| Input                        | Required | Default             | Description                                                        |
+| ---------------------------- | -------- | ------------------- | ------------------------------------------------------------------ |
+| `destination`                | No       | `s3`                | Where to publish: `s3`, `artifact`, or `both`                      |
+| `s3_bucket`                  | Cond.    |                     | Target S3 bucket; required unless `destination` is `artifact`      |
+| `s3_path`                    | No       |                     | Full path in the bucket; overrides the derived path                |
+| `path_prefix`                | No       | `logs`              | Top-level prefix within the bucket                                 |
+| `namespace`                  | No       | `gha`               | Second path element, analogous to the Jenkins silo                 |
+| `job_name`                   | No       | `$GITHUB_JOB`       | Job identifier in the path; set per matrix leg                     |
+| `workspace`                  | No       | `$GITHUB_WORKSPACE` | Directory to collect files from                                    |
+| `archive_dir`                | No       | `archives`          | Directory below the workspace always collected                     |
+| `archive_patterns`           | No       |                     | Newline-separated globs, relative to the workspace                 |
+| `capture_console`            | No       | `false`             | Fetch job console logs through the REST API                        |
+| `include_sysinfo`            | No       | `true`              | Write a `_sys-info.log` describing the runner                      |
+| `compress`                   | No       | `true`              | Compress text content before upload                                |
+| `compress_suffix`            | No       | `false`             | Append `.gz` to compressed files (legacy Jenkins naming)           |
+| `index_markers`              | No       | `true`              | Trigger server-side regeneration of `index.html`                   |
+| `base_url`                   | No       |                     | Public base URL of the log server, used to build `log_url`         |
+| `aws_region`                 | No       | `us-east-1`         | AWS region of the bucket                                           |
+| `artifact_name`              | No       | `build-logs`        | Name of the uploaded artifact; set per matrix leg                  |
+| `artifact_retention_days`    | No       |                     | Artifact retention; empty uses the repository default              |
+| `artifact_if_no_files_found` | No       | `warn`              | Behaviour when the run collects nothing: `warn`, `error`, `ignore` |
+| `github_token`               | No       |                     | Token for `capture_console`                                        |
+| `dry_run`                    | No       | `false`             | Collect and build the manifest, but make no S3 calls               |
+| `permit_fail`                | No       | `true`              | Do not fail the step when publishing fails                         |
 
 ## Outputs
 
-| Output          | Description                           |
-| --------------- | ------------------------------------- |
-| `s3_path`       | Resolved path within the bucket       |
-| `log_url`       | Public URL of the published directory |
-| `file_count`    | Number of files collected             |
-| `upload_count`  | Number of files uploaded              |
-| `failed_count`  | Number of files that failed to upload |
-| `manifest_path` | Path to the generated upload manifest |
+| Output          | Description                                          |
+| --------------- | ---------------------------------------------------- |
+| `s3_path`       | Resolved path within the bucket                      |
+| `log_url`       | Public URL of the published directory                |
+| `file_count`    | Number of files collected                            |
+| `upload_count`  | Number of files uploaded to S3                       |
+| `failed_count`  | Number of files that failed to upload                |
+| `manifest_path` | Path to the generated upload manifest                |
+| `staging_dir`   | Staged tree, when the artifact destination is in use |
+| `artifact_name` | Name of the uploaded artifact, empty when none       |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -257,6 +317,9 @@ This action writes cumulative prefixes.
 ## Prerequisites
 
 ### AWS credentials
+
+These apply when `destination` is `s3` or `both`. Publishing to
+artifacts alone requires no bucket, no credentials and no AWS CLI.
 
 The action needs `s3:PutObject` and `s3:DeleteObject` on the target
 prefix. Use OIDC rather than long-lived keys:

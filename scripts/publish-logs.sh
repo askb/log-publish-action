@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
 ##############################################################################
-# Collect build logs and test reports and publish them to an S3 log server.
+# Collect build logs and test reports and publish them to an S3 log
+# server, to a GitHub workflow artifact, or to both.
+#
+# Collection, console capture, metadata generation and compression are
+# independent of the destination; only the final upload stage differs.
 #
 # This reproduces what Jenkins does today through global-jjb's
 # lf-infra-publish macro -> shell/logs-deploy.sh -> lftools deploy s3,
@@ -24,6 +28,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+destination="${INPUT_DESTINATION:-s3}"
 s3_bucket="${INPUT_S3_BUCKET:-}"
 s3_path_input="${INPUT_S3_PATH:-}"
 path_prefix="${INPUT_PATH_PREFIX:-logs}"
@@ -45,6 +50,19 @@ permit_fail="${INPUT_PERMIT_FAIL:-true}"
 
 workspace="${workspace:-${GITHUB_WORKSPACE:-$PWD}}"
 job_name="${job_name:-${GITHUB_JOB:-job}}"
+
+# Which destinations are active. Everything up to the upload stage runs
+# identically either way; only the final hand off differs.
+uses_s3='false'
+uses_artifact='false'
+case "$destination" in
+    s3) uses_s3='true' ;;
+    artifact) uses_artifact='true' ;;
+    both)
+        uses_s3='true'
+        uses_artifact='true'
+        ;;
+esac
 
 # Files matching these are worth compressing. Binary and already
 # compressed formats are excluded; gzipping them wastes CPU and can
@@ -131,7 +149,12 @@ else
     s3_path="${s3_path}/${run_number}/${run_attempt}/${job_slug}"
 fi
 
-log_info "Publishing to s3://${s3_bucket}/${s3_path}/"
+if [ "$uses_s3" = 'true' ]; then
+    log_info "Publishing to s3://${s3_bucket}/${s3_path}/"
+fi
+if [ "$uses_artifact" = 'true' ]; then
+    log_info "Publishing as workflow artifact (destination: ${destination})"
+fi
 
 # ---------------------------------------------------------------------------
 # Stage the content
@@ -145,6 +168,12 @@ cleanup() {
     # A dry run exists to be inspected, so the staged tree is left in
     # place and its location reported.
     if [ "$dry_run" = 'true' ]; then
+        return 0
+    fi
+    # The artifact destination uploads the staged tree from a later
+    # composite step, which cannot run if this script removes it. That
+    # step owns the cleanup instead.
+    if [ "$uses_artifact" = 'true' ]; then
         return 0
     fi
     rm -rf "$staging" 2> /dev/null || true
@@ -307,7 +336,7 @@ if [ "$dry_run" = 'true' ]; then
     log_info "staging-dir: ${staging}"
     log_info '--- manifest ---'
     cat "$manifest"
-else
+elif [ "$uses_s3" = 'true' ]; then
     export AWS_REGION="$aws_region"
     export AWS_DEFAULT_REGION="$aws_region"
 
@@ -370,10 +399,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Artifact hand off
+#
+# actions/upload-artifact is an action, not a CLI, so the upload itself
+# happens in the composite step that follows. All this stage does is keep
+# the staged tree and report where it is.
+# ---------------------------------------------------------------------------
+staging_dir_output=''
+artifact_name_output=''
+if [ "$dry_run" = 'true' ]; then
+    staging_dir_output="$staging"
+elif [ "$uses_artifact" = 'true' ]; then
+    staging_dir_output="$staging"
+    artifact_name_output="${INPUT_ARTIFACT_NAME:-build-logs}"
+    log_info "Staged tree retained for artifact upload: ${staging}"
+fi
+
+# ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
 log_url=''
-if [ -n "$base_url" ]; then
+if [ -n "$base_url" ] && [ "$uses_s3" = 'true' ]; then
     log_url="${base_url%/}/${s3_path}/"
 fi
 
@@ -388,6 +434,8 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
         echo "upload_count=${upload_count}"
         echo "failed_count=${failed_count}"
         echo "manifest_path=${persisted_manifest}"
+        echo "staging_dir=${staging_dir_output}"
+        echo "artifact_name=${artifact_name_output}"
     } >> "$GITHUB_OUTPUT"
 fi
 
@@ -397,16 +445,20 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         echo
         if [ -n "$log_url" ]; then
             echo "[Browse logs](${log_url})"
-        else
+        elif [ "$uses_s3" = 'true' ]; then
             echo "\`s3://${s3_bucket}/${s3_path}/\`"
         fi
+        if [ "$uses_artifact" = 'true' ] && [ "$dry_run" != 'true' ]; then
+            echo "Workflow artifact: \`${artifact_name_output}\`"
+        fi
         echo
+        echo "- Destination: ${destination}"
         echo "- Files collected: ${file_count}"
-        if [ "$dry_run" != 'true' ]; then
+        if [ "$dry_run" = 'true' ]; then
+            echo '- Dry run: no files uploaded'
+        elif [ "$uses_s3" = 'true' ]; then
             echo "- Uploaded: ${upload_count}"
             echo "- Failed: ${failed_count}"
-        else
-            echo '- Dry run: no files uploaded'
         fi
     } >> "$GITHUB_STEP_SUMMARY"
 fi

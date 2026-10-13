@@ -11,6 +11,7 @@
 
 set -euo pipefail
 
+destination="${INPUT_DESTINATION:-s3}"
 s3_bucket="${INPUT_S3_BUCKET:-}"
 s3_path="${INPUT_S3_PATH:-}"
 path_prefix="${INPUT_PATH_PREFIX:-logs}"
@@ -21,16 +22,33 @@ dry_run="${INPUT_DRY_RUN:-false}"
 
 echo 'Validating inputs...'
 
-if [ -z "$s3_bucket" ]; then
-    echo 'Error: s3_bucket is required ❌'
+case "$destination" in
+    s3 | artifact | both) ;;
+    *)
+        echo "Error: destination must be s3, artifact or both ❌"
+        echo "  Received: '$destination'"
+        exit 1
+        ;;
+esac
+
+# The S3 specific checks apply only when something is actually going to
+# S3. An artifact only run needs no bucket, no credentials and no CLI.
+uses_s3='false'
+if [ "$destination" = 's3' ] || [ "$destination" = 'both' ]; then
+    uses_s3='true'
+fi
+
+if [ "$uses_s3" = 'true' ] && [ -z "$s3_bucket" ]; then
+    echo "Error: s3_bucket is required when destination is '$destination' ❌"
     exit 1
 fi
 
 # S3 bucket naming rules: 3-63 chars, lowercase alphanumeric, dots and
 # hyphens, must start and end alphanumeric. Catching this here avoids a
 # confusing failure deep inside the AWS CLI.
-if ! printf '%s' "$s3_bucket" |
-    grep -qE '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'; then
+if [ -n "$s3_bucket" ] &&
+    ! printf '%s' "$s3_bucket" |
+        grep -qE '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'; then
     echo "Error: s3_bucket '$s3_bucket' is not a valid bucket name ❌"
     exit 1
 fi
@@ -50,10 +68,11 @@ done
 if [ -n "$s3_path" ]; then
     # The index marker is written to the first three path segments. A
     # shallower path would place markers outside the intended hierarchy.
+    # Artifact only runs never write markers, so the depth is immaterial.
     trimmed="${s3_path#/}"
     trimmed="${trimmed%/}"
     segments="$(printf '%s' "$trimmed" | awk -F/ '{print NF}')"
-    if [ "$segments" -lt 3 ]; then
+    if [ "$uses_s3" = 'true' ] && [ "$segments" -lt 3 ]; then
         echo "Error: s3_path must be at least three segments deep ❌"
         echo "  Received: '$s3_path' ($segments segment(s))"
         echo "  The first three segments receive the index marker."
@@ -75,7 +94,8 @@ if [ "$capture_console" = 'true' ] &&
     exit 1
 fi
 
-if [ "$dry_run" != 'true' ] && ! command -v aws > /dev/null 2>&1; then
+if [ "$uses_s3" = 'true' ] && [ "$dry_run" != 'true' ] &&
+    ! command -v aws > /dev/null 2>&1; then
     echo 'Error: the AWS CLI is not installed ❌'
     echo '  GitHub hosted runners ship it; self hosted runners may not.'
     exit 1
