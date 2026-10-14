@@ -139,15 +139,15 @@ publish-logs:
     actions: read        # required to read job logs
     id-token: write      # required for OIDC
   steps:
-    - uses: aws-actions/configure-aws-credentials@v4
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
       with:
         role-to-assume: ${{ vars.AWS_LOG_ROLE_ARN }}
-        aws-region: us-east-1
+        aws-region: ${{ vars.S3_LOG_REGION }}
 
     - uses: lfreleng-actions/log-publish-action@main
       with:
-        s3_bucket: ${{ vars.S3_BUCKET }}
-        base_url: "https://logs.example.org"
+        s3_bucket: ${{ vars.S3_LOG_BUCKET }}
+        base_url: ${{ vars.LOG_BASE_URL }}
         capture_console: true
         github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -183,7 +183,7 @@ release and no change to any calling repository:
 - uses: lfreleng-actions/log-publish-action@v1
   with:
     destination: ${{ vars.LOG_PUBLISH_DESTINATION || 's3' }}
-    s3_bucket: ${{ vars.LOG_S3_BUCKET }}
+    s3_bucket: ${{ vars.S3_LOG_BUCKET }}
 ```
 
 That matters because the log server is infrastructure. Should it retire
@@ -332,16 +332,32 @@ permissions:
   contents: read
 
 steps:
-  - uses: aws-actions/configure-aws-credentials@v4
+  - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
     with:
       role-to-assume: ${{ vars.AWS_LOG_ROLE_ARN }}
-      aws-region: us-east-1
+      aws-region: ${{ vars.S3_LOG_REGION }}
 ```
 
 <!-- markdownlint-enable MD013 -->
 
 The IAM trust policy should scope to the organisation's repositories,
-and the permission policy to the log prefix alone.
+and the permission policy to the log prefix alone. Scope the trust
+`sub` claim to branch refs so pull requests and forks cannot assume
+the role:
+
+<!-- markdownlint-disable MD013 -->
+
+```json
+"StringLike": {
+  "token.actions.githubusercontent.com:sub": "repo:my-org/*:ref:refs/heads/*"
+}
+```
+
+<!-- markdownlint-enable MD013 -->
+
+Place `configure-aws-credentials` next to this action rather than at the
+top of a long job. The session is short-lived, so a role assumed at the
+start of a multi-hour build can expire before the upload runs.
 
 ### Tooling
 
