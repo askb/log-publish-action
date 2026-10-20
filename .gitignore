@@ -58,3 +58,7 @@ MANIFEST
 
 # Node
 node_modules/*
+
+# aislop writes a local score history on every scan (see aislop trend).
+# .aislop/config.yml is the only file there that belongs in git.
+.aislop/history.jsonl
