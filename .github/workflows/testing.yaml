@@ -30,14 +30,25 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
-      # Harden the runner used by this workflow
+      # Load the egress allow-list out-of-band from the
+      # organisation's .github repository and publish it as
+      # $CONNECTION_ALLOW_LIST for the harden-runner step below.
       # yamllint disable-line rule:line-length
-      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+      - uses: lfreleng-actions/harden-runner-block-action@51ef68401547a8b648275129b9a21544612596d5  # v0.13.1
         with:
-          egress-policy: audit
+          config: '@56d70f0eae78f334a598d1ffe071d4b821517b22'  # v0.17.1
+
+      # Harden the runner with the just-loaded allow-list.
+      - name: 'Harden runner (block)'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25  # v2.22.1
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
 
       - name: "Checkout repository"
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -68,14 +79,25 @@ jobs:
       contents: read
     timeout-minutes: 10
     steps:
-      # Harden the runner used by this workflow
+      # Load the egress allow-list out-of-band from the
+      # organisation's .github repository and publish it as
+      # $CONNECTION_ALLOW_LIST for the harden-runner step below.
       # yamllint disable-line rule:line-length
-      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+      - uses: lfreleng-actions/harden-runner-block-action@51ef68401547a8b648275129b9a21544612596d5  # v0.13.1
         with:
-          egress-policy: audit
+          config: '@56d70f0eae78f334a598d1ffe071d4b821517b22'  # v0.17.1
+
+      # Harden the runner with the just-loaded allow-list.
+      - name: 'Harden runner (block)'
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25  # v2.22.1
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
 
       - name: "Checkout repository"
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -96,7 +118,7 @@ jobs:
 
       - name: "Running local action: ${{ github.repository }}"
         id: publish
-        uses: ./
+        uses: $/
         with:
           s3_bucket: "logs-example-org"
           namespace: "gha-test"
@@ -112,6 +134,7 @@ jobs:
           S3_PATH: "${{ steps.publish.outputs.s3_path }}"
           LOG_URL: "${{ steps.publish.outputs.log_url }}"
           FILE_COUNT: "${{ steps.publish.outputs.file_count }}"
+          REPO: "${{ github.repository }}"
         run: |
           # Local action validation
           set -euo pipefail
@@ -139,7 +162,7 @@ jobs:
           esac
 
           [ "$fail" -eq 0 ] || exit 1
-          echo "Validated local action: ${{ github.repository }} ✅"
+          echo "Validated local action: $REPO ✅"
           {
             echo "### Action outputs"
             echo "- s3_path: \`$S3_PATH\`"
@@ -153,7 +176,7 @@ jobs:
       # it really invokes actions/upload-artifact.
       - name: "Running local action: artifact destination"
         id: artifact
-        uses: ./
+        uses: $/
         with:
           destination: "artifact"
           artifact_name: "test-build-logs"
@@ -196,7 +219,7 @@ jobs:
       # the logs, so an unreachable bucket is tolerated by default.
       - name: "Running local action: permit_fail tolerates upload errors"
         id: tolerated
-        uses: ./
+        uses: $/
         with:
           s3_bucket: "logs-example-org"
           namespace: "gha-test"
@@ -214,7 +237,7 @@ jobs:
 
       # yamllint disable-line rule:line-length
       - name: "Running local action: ${{ github.repository }} [Override Failure]"
-        uses: ./
+        uses: $/
         id: failure
         continue-on-error: true
         with:
