@@ -224,16 +224,15 @@ upload_manifest() {
             log_error "${target}: failed to upload ${key}"
         fi
     done < "$manifest"
-    if [ "$target" = 'r2' ] && [ -d "$index_dir" ]; then
-        while IFS= read -r -d '' page; do
-            key="${page#"${index_dir}/"}"
+    if [ "$target" = 'r2' ] && [ -f "${index_dir}/pages.tsv" ]; then
+        while IFS=$'\t' read -r page key; do
             if upload_object r2 "$bucket" "$page" "$key" 'text/html' '-'; then
                 target_upload_count=$((target_upload_count + 1))
             else
                 target_failed_count=$((target_failed_count + 1))
                 log_error "r2: failed to upload ${key}"
             fi
-        done < <(find "$index_dir" -type f -print0 | sort -z)
+        done < "${index_dir}/pages.tsv"
     fi
     upload_count=$((upload_count + target_upload_count))
     failed_count=$((failed_count + target_failed_count))
@@ -246,7 +245,9 @@ upload_manifest() {
 # the first three prefixes is what triggers that regeneration.
 refresh_s3_index_markers() {
     local marker prefix='' seg_index=0 segment segments
-    marker="${staging}/_tmpfile"
+    # Outside the staged tree, so a collected file named _tmpfile is never
+    # truncated or removed before a later destination uploads it.
+    marker="${staging}.marker"
     : > "$marker"
     IFS='/' read -r -a segments <<< "$s3_path"
     for segment in "${segments[@]}"; do
@@ -280,10 +281,15 @@ href_escape() {
 # R2 has no equivalent of the S3 log server's listing Lambda, so render a
 # plain index.html for every directory of this run. A directory that
 # already ships its own index.html, such as an Allure report, keeps it.
+#
+# Pages are written under flat numbered names, with pages.tsv mapping
+# each one to its object key. Mirroring the tree on disk would collide
+# when a collected directory is itself named index.html.
 generate_index_pages() {
-    local dir kind name title page
+    local dir kind name title page page_no=0
     rm -rf "$index_dir"
     mkdir -p "$index_dir"
+    : > "${index_dir}/pages.tsv"
     # One "directory<TAB>kind<TAB>child" row per immediate child.
     cut -f2 "$manifest" | awk -F/ '{
         parent = ""
@@ -305,8 +311,9 @@ generate_index_pages() {
         if grep -qxF -- "${dir}index.html" < <(cut -f2 "$manifest"); then
             continue
         fi
-        page="${index_dir}/${dir}index.html"
-        mkdir -p "$(dirname "$page")"
+        page_no=$((page_no + 1))
+        page="${index_dir}/page-${page_no}.html"
+        printf '%s\t%s\n' "$page" "${dir}index.html" >> "${index_dir}/pages.tsv"
         title="$(html_escape "/${s3_path}/${dir}")"
         {
             echo '<!DOCTYPE html>'
@@ -554,7 +561,7 @@ if [ "$dry_run" = 'true' ]; then
         generate_index_pages
         log_info "index-dir: ${index_dir}"
         log_info '--- r2 index pages ---'
-        (cd "$index_dir" && find . -type f -name index.html | sed 's|^\./||' | sort)
+        cut -f2 "${index_dir}/pages.tsv" | sort
     fi
 else
     if [ "$uses_s3" = 'true' ]; then

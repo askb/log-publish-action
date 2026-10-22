@@ -150,6 +150,15 @@ output_field() {
     printf '%s' "$1" | sed -n "s/^${2}=//p" | head -1
 }
 
+# Print a generated R2 index page by its object key. Pages are stored
+# under flat names, so look the key up in pages.tsv.
+index_page() {
+    local page
+    page="$(LPA_KEY="$2" awk -F'\t' '$2 == ENVIRON["LPA_KEY"] {print $1}' \
+        "$1/pages.tsv" 2> /dev/null)"
+    [ -n "$page" ] && cat "$page" 2> /dev/null
+}
+
 # Extract one manifest column for a staged path.
 manifest_field() {
     local output="$1" rel="$2" col="$3"
@@ -533,7 +542,7 @@ assert_contains "$pages" 'allure-report/data/index.html' \
 assert_not_contains "$pages" 'allure-report/index.html' \
     'existing report index.html is preserved'
 idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
-root_page="$(cat "${idx}/index.html" 2> /dev/null)"
+root_page="$(index_page "$idx" 'index.html')"
 assert_contains "$root_page" '<a href="./karaf.log">karaf.log</a>' \
     'root index links a top level file'
 assert_contains "$root_page" '<a href="./allure-report/">allure-report/</a>' \
@@ -544,7 +553,7 @@ assert_contains "$root_page" 'href="./javascript:alert(1).log"' \
 assert_not_contains "$root_page" 'href="javascript:' \
     'file name cannot inject a javascript: URL'
 assert_not_contains "$root_page" 'href="../"' 'root index has no parent link'
-data_page="$(cat "${idx}/allure-report/data/index.html" 2> /dev/null)"
+data_page="$(index_page "$idx" 'allure-report/data/index.html')"
 assert_contains "$data_page" '<a href="./suites.json">suites.json</a>' \
     'nested index links its files'
 assert_contains "$data_page" 'href="../"' 'nested index links its parent'
@@ -560,6 +569,8 @@ evil_dir="$evil_ws/archives/report"$'\n'"row"$'\t'".."
 mkdir -p "$evil_dir"
 echo 'x' > "$evil_dir/result.log"
 echo 'x' > "$evil_ws/archives/suite\\result.log"
+mkdir -p "$evil_ws/archives/index.html"
+echo 'x' > "$evil_ws/archives/index.html/result.log"
 mkdir -p "$evil_ws/archives/report\\new"
 echo 'x' > "$evil_ws/archives/report\\new/result.log"
 priv_tmp="$(mktemp -d -t lpa-tmp.XXXXXXXX)"
@@ -570,16 +581,18 @@ assert_contains "$out" 'Skipping file with control characters' \
     'control characters in a path are rejected'
 assert_not_contains "$out" 'result.log	result.log' \
     'control character path stays out of the manifest'
-if [ -e "${priv_tmp}/index.html" ]; then
-    ko 'no index page is written outside the generated tree' \
-        "${priv_tmp}/index.html exists"
-else
-    ok 'no index page is written outside the generated tree'
-fi
 idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
-assert_contains "$(cat "${idx}/index.html" 2> /dev/null)" \
+assert_not_contains "$(cut -f2 "${idx}/pages.tsv" 2> /dev/null)" '..' \
+    'no index page key escapes the published tree'
+# A directory named index.html must neither abort generation nor lose
+# its own listing.
+assert_contains "$(index_page "$idx" 'index.html')" \
+    'href="./index.html/"' 'root lists a directory named index.html'
+assert_contains "$(index_page "$idx" 'index.html/index.html')" \
+    'href="./result.log"' 'directory named index.html gets its own listing'
+assert_contains "$(index_page "$idx" 'index.html')" \
     'href="./suite%5Cresult.log"' 'backslash is percent-encoded in links'
-assert_contains "$(cat "${idx}/report\\new/index.html" 2> /dev/null)" \
+assert_contains "$(index_page "$idx" 'report\new/index.html')" \
     'href="./result.log"' 'directory with a backslash still lists its files'
 rm -rf "$priv_tmp" "$evil_ws"
 
@@ -591,9 +604,21 @@ cat > "${stub_dir}/aws" << 'STUB'
 #!/usr/bin/env bash
 printf '%s|%s|%s|%s\n' "${AWS_ACCESS_KEY_ID:-}" "${AWS_SESSION_TOKEN:-}" \
     "${AWS_REGION:-}" "$*" >> "$LPA_CALLS"
+# Like the real CLI, fail when the local source of a cp has vanished.
+prev=''
+for arg in "$@"; do
+    if [ "$prev" = 'cp' ] && [ ! -f "$arg" ]; then
+        echo "missing source: $arg" >> "$LPA_CALLS"
+        exit 1
+    fi
+    prev="$arg"
+done
 STUB
 chmod +x "${stub_dir}/aws"
 
+# A collected _tmpfile shares its name with the S3 index marker; the
+# marker refresh, which runs before the R2 upload, must not touch it.
+echo 'user data' > "$ws/archives/_tmpfile"
 tmp_out="$(mktemp -t lpa-gho.XXXXXXXX)"
 tmp_sum="$(mktemp -t lpa-sum.XXXXXXXX)"
 run_publish "$ws" 'INPUT_DRY_RUN=false' 'INPUT_DESTINATION=r2,s3' \
@@ -635,7 +660,12 @@ assert_eq "$(output_field "$outputs" 's3_log_url')" \
     'https://logs.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 's3_log_url output set'
 assert_eq "$(output_field "$outputs" 'r2_log_url')" \
     'https://logs-r2.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 'r2_log_url output set'
-assert_contains "$outputs" 'failed_count=0' 'dual publish reports no failures'
+assert_eq "$(output_field "$outputs" 'failed_count')" '0' \
+    'dual publish reports no failures'
+assert_not_contains "$log" 'missing source' \
+    'every upload source still exists when its turn comes'
+assert_contains "$r2_calls" 'maven-merge/_tmpfile --content-type' \
+    'a collected _tmpfile reaches r2 after the s3 marker refresh'
 assert_contains "$summary" '- R2: [Browse logs]' 'summary links the r2 copy'
 assert_contains "$summary" '- S3: [Browse logs]' 'summary links the s3 copy'
 
@@ -661,7 +691,8 @@ run_publish "$ws" 'INPUT_DRY_RUN=false' 'INPUT_DESTINATION=r2' \
 log="$(cat "$calls" 2> /dev/null)"
 assert_not_contains "$log" '/index.html --content-type' \
     'r2_index=false skips generated pages'
-assert_not_contains "$log" '_tmpfile' 'r2 never writes s3 index markers'
+assert_not_contains "$log" 's3://odl-logs/logs/_tmpfile' \
+    'r2 never writes s3 index markers'
 
 rm -rf "$stub_dir" "$tmp_out" "$tmp_sum" "$ws"
 
