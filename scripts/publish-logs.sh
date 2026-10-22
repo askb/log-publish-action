@@ -3,7 +3,8 @@
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
 ##############################################################################
 # Collect build logs and test reports and publish them to an S3 log
-# server, to a GitHub workflow artifact, or to both.
+# server, a Cloudflare R2 bucket, a GitHub workflow artifact, or any
+# combination of those.
 #
 # Collection, console capture, metadata generation and compression are
 # independent of the destination; only the final upload stage differs.
@@ -44,6 +45,13 @@ compress_suffix="${INPUT_COMPRESS_SUFFIX:-false}"
 index_markers="${INPUT_INDEX_MARKERS:-true}"
 base_url="${INPUT_BASE_URL:-}"
 aws_region="${INPUT_AWS_REGION:-us-east-1}"
+r2_bucket="${INPUT_R2_BUCKET:-}"
+r2_account_id="${INPUT_R2_ACCOUNT_ID:-}"
+r2_endpoint_url="${INPUT_R2_ENDPOINT_URL:-}"
+r2_access_key_id="${INPUT_R2_ACCESS_KEY_ID:-}"
+r2_secret_access_key="${INPUT_R2_SECRET_ACCESS_KEY:-}"
+r2_base_url="${INPUT_R2_BASE_URL:-}"
+r2_index="${INPUT_R2_INDEX:-true}"
 github_token="${INPUT_GITHUB_TOKEN:-}"
 dry_run="${INPUT_DRY_RUN:-false}"
 permit_fail="${INPUT_PERMIT_FAIL:-true}"
@@ -51,18 +59,36 @@ permit_fail="${INPUT_PERMIT_FAIL:-true}"
 workspace="${workspace:-${GITHUB_WORKSPACE:-$PWD}}"
 job_name="${job_name:-${GITHUB_JOB:-job}}"
 
+if [ -z "$r2_endpoint_url" ] && [ -n "$r2_account_id" ]; then
+    r2_endpoint_url="https://${r2_account_id}.r2.cloudflarestorage.com"
+fi
+
 # Which destinations are active. Everything up to the upload stage runs
-# identically either way; only the final hand off differs.
+# identically either way; only the final hand off differs. The list is
+# comma or space separated and its order picks the primary log_url, so
+# "r2,s3" dual publishes but advertises the R2 copy.
 uses_s3='false'
+uses_r2='false'
 uses_artifact='false'
-case "$destination" in
-    s3) uses_s3='true' ;;
-    artifact) uses_artifact='true' ;;
-    both)
-        uses_s3='true'
-        uses_artifact='true'
-        ;;
-esac
+remote_order=()
+for dest in ${destination//,/ }; do
+    case "$dest" in
+        s3)
+            uses_s3='true'
+            remote_order+=(s3)
+            ;;
+        r2)
+            uses_r2='true'
+            remote_order+=(r2)
+            ;;
+        artifact) uses_artifact='true' ;;
+        both)
+            uses_s3='true'
+            uses_artifact='true'
+            remote_order+=(s3)
+            ;;
+    esac
+done
 
 # Files matching these are worth compressing. Binary and already
 # compressed formats are excluded; gzipping them wastes CPU and can
@@ -72,6 +98,10 @@ COMPRESS_EXTENSIONS='html|htm|log|txt|xml|json|css|js|csv|md|yaml|yml|svg'
 upload_count=0
 failed_count=0
 file_count=0
+s3_upload_count=0
+s3_failed_count=0
+r2_upload_count=0
+r2_failed_count=0
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -133,6 +163,159 @@ log_info() { echo "$*"; }
 log_warn() { echo "::warning::$*"; }
 log_error() { echo "::error::$*"; }
 
+# The AWS CLI against the AWS account the caller authenticated to, using
+# whatever credentials are already in the environment (normally the
+# short lived OIDC session from configure-aws-credentials).
+s3_cli() {
+    AWS_REGION="$aws_region" AWS_DEFAULT_REGION="$aws_region" aws "$@"
+}
+
+# The AWS CLI against Cloudflare R2. Runs in a subshell so the R2 token
+# never replaces the AWS session used by s3_cli, which is what makes dual
+# publishing possible. R2 ignores the region but the CLI demands one, and
+# only computes optional checksums when R2 actually requires them.
+r2_cli() {
+    (
+        unset AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_PROFILE
+        export AWS_ACCESS_KEY_ID="$r2_access_key_id"
+        export AWS_SECRET_ACCESS_KEY="$r2_secret_access_key"
+        export AWS_REGION='auto'
+        export AWS_DEFAULT_REGION='auto'
+        export AWS_REQUEST_CHECKSUM_CALCULATION='when_required'
+        export AWS_RESPONSE_CHECKSUM_VALIDATION='when_required'
+        aws --endpoint-url "$r2_endpoint_url" "$@"
+    )
+}
+
+# Upload one file with retries. A transient TLS or DNS blip should not
+# cost the whole upload.
+upload_object() {
+    local target="$1" bucket="$2" src="$3" key="$4" ctype="$5" encoding="$6"
+    local args attempt=1
+    args=(--content-type "$ctype" --only-show-errors)
+    if [ "$encoding" != '-' ]; then
+        args+=(--content-encoding "$encoding")
+    fi
+    while [ "$attempt" -le 3 ]; do
+        if "${target}_cli" s3 cp "$src" \
+            "s3://${bucket}/${s3_path}/${key}" "${args[@]}" 2>&1; then
+            return 0
+        fi
+        log_warn "${target}: upload attempt ${attempt} failed for ${key}"
+        attempt=$((attempt + 1))
+        sleep $((attempt * 2))
+    done
+    return 1
+}
+
+# Upload the whole manifest, plus any generated index pages, to one
+# target. Leaves per target counts in target_upload_count and
+# target_failed_count and adds them to the overall totals.
+upload_manifest() {
+    local target="$1" bucket="$2" rel key ctype encoding page
+    target_upload_count=0
+    target_failed_count=0
+    while IFS=$'\t' read -r rel key ctype encoding _size; do
+        if upload_object "$target" "$bucket" "${staging}/${rel}" \
+            "$key" "$ctype" "$encoding"; then
+            target_upload_count=$((target_upload_count + 1))
+        else
+            target_failed_count=$((target_failed_count + 1))
+            log_error "${target}: failed to upload ${key}"
+        fi
+    done < "$manifest"
+    if [ "$target" = 'r2' ] && [ -d "$index_dir" ]; then
+        while IFS= read -r -d '' page; do
+            key="${page#"${index_dir}/"}"
+            if upload_object r2 "$bucket" "$page" "$key" 'text/html' '-'; then
+                target_upload_count=$((target_upload_count + 1))
+            else
+                target_failed_count=$((target_failed_count + 1))
+                log_error "r2: failed to upload ${key}"
+            fi
+        done < <(find "$index_dir" -type f -print0 | sort -z)
+    fi
+    upload_count=$((upload_count + target_upload_count))
+    failed_count=$((failed_count + target_failed_count))
+    log_info "${target}: uploaded ${target_upload_count} file(s)," \
+        "${target_failed_count} failure(s)"
+}
+
+# S3 has no directories, so the log server regenerates index.html from
+# object events. Writing and immediately removing a marker in each of
+# the first three prefixes is what triggers that regeneration.
+refresh_s3_index_markers() {
+    local marker prefix='' seg_index=0 segment segments
+    marker="${staging}/_tmpfile"
+    : > "$marker"
+    IFS='/' read -r -a segments <<< "$s3_path"
+    for segment in "${segments[@]}"; do
+        [ "$seg_index" -ge 3 ] && break
+        prefix="${prefix}${segment}/"
+        if s3_cli s3 cp "$marker" "s3://${s3_bucket}/${prefix}_tmpfile" \
+            --only-show-errors 2>&1; then
+            s3_cli s3 rm "s3://${s3_bucket}/${prefix}_tmpfile" \
+                --only-show-errors 2>&1 || true
+            log_info "Refreshed index for ${prefix}"
+        else
+            log_warn "Could not refresh index for ${prefix}"
+        fi
+        seg_index=$((seg_index + 1))
+    done
+    rm -f "$marker"
+}
+
+html_escape() {
+    sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+        -e 's/"/\&quot;/g' <<< "$1"
+}
+
+href_escape() {
+    sed -e 's/%/%25/g' -e 's/ /%20/g' -e 's/#/%23/g' -e 's/?/%3F/g' \
+        -e 's/&/\&amp;/g' -e 's/"/%22/g' -e 's/</%3C/g' -e 's/>/%3E/g' \
+        <<< "$1"
+}
+
+# R2 has no equivalent of the S3 log server's listing Lambda, so render a
+# plain index.html for every directory of this run. A directory that
+# already ships its own index.html, such as an Allure report, keeps it.
+generate_index_pages() {
+    local dir kind name title page
+    rm -rf "$index_dir"
+    mkdir -p "$index_dir"
+    # One "directory<TAB>kind<TAB>child" row per immediate child.
+    cut -f2 "$manifest" | awk -F/ '{
+        parent = ""
+        for (i = 1; i <= NF; i++) {
+            kind = (i < NF) ? "d" : "f"
+            print parent "\t" kind "\t" $i
+            parent = parent $i "/"
+        }
+    }' | sort -u > "${index_dir}.rows"
+    while IFS= read -r dir; do
+        if grep -qxF -- "${dir}index.html" < <(cut -f2 "$manifest"); then
+            continue
+        fi
+        page="${index_dir}/${dir}index.html"
+        mkdir -p "$(dirname "$page")"
+        title="$(html_escape "/${s3_path}/${dir}")"
+        {
+            echo '<!DOCTYPE html>'
+            echo '<html><head><meta charset="utf-8">'
+            echo "<title>Index of ${title}</title></head><body>"
+            echo "<h1>Index of ${title}</h1><ul>"
+            [ -n "$dir" ] && echo '<li><a href="../">../</a></li>'
+            while IFS=$'\t' read -r _ kind name; do
+                [ "$kind" = 'd' ] && name="${name}/"
+                echo "<li><a href=\"$(href_escape "$name")\">$(html_escape "$name")</a></li>"
+            done < <(awk -F'\t' -v d="$dir" '$1 == d' "${index_dir}.rows" |
+                sort -t$'\t' -k2,2 -k3,3)
+            echo '</ul></body></html>'
+        } > "$page"
+    done < <(cut -f1 "${index_dir}.rows" | sort -u)
+    rm -f "${index_dir}.rows"
+}
+
 # ---------------------------------------------------------------------------
 # Resolve the destination path
 # ---------------------------------------------------------------------------
@@ -152,6 +335,9 @@ fi
 if [ "$uses_s3" = 'true' ]; then
     log_info "Publishing to s3://${s3_bucket}/${s3_path}/"
 fi
+if [ "$uses_r2" = 'true' ]; then
+    log_info "Publishing to r2://${r2_bucket}/${s3_path}/"
+fi
 if [ "$uses_artifact" = 'true' ]; then
     log_info "Publishing as workflow artifact (destination: ${destination})"
 fi
@@ -163,8 +349,11 @@ staging="$(mktemp -d -t log-publish.XXXXXXXX)"
 manifest="${staging}.manifest"
 : > "$manifest"
 
+index_dir="${staging}.index"
+
 cleanup() {
     rm -f "$manifest" 2> /dev/null || true
+    rm -rf "$index_dir" 2> /dev/null || true
     # A dry run exists to be inspected, so the staged tree is left in
     # place and its location reported.
     if [ "$dry_run" = 'true' ]; then
@@ -332,69 +521,31 @@ fi
 # Upload
 # ---------------------------------------------------------------------------
 if [ "$dry_run" = 'true' ]; then
-    log_info 'Dry run: no S3 calls will be made'
+    log_info 'Dry run: no S3 or R2 calls will be made'
     log_info "staging-dir: ${staging}"
     log_info '--- manifest ---'
     cat "$manifest"
-elif [ "$uses_s3" = 'true' ]; then
-    export AWS_REGION="$aws_region"
-    export AWS_DEFAULT_REGION="$aws_region"
-
-    while IFS=$'\t' read -r rel key ctype encoding _size; do
-        args=(--content-type "$ctype" --only-show-errors)
-        if [ "$encoding" != '-' ]; then
-            args+=(--content-encoding "$encoding")
+    if [ "$uses_r2" = 'true' ] && [ "$r2_index" = 'true' ]; then
+        generate_index_pages
+        log_info '--- r2 index pages ---'
+        (cd "$index_dir" && find . -type f -name index.html | sed 's|^\./||' | sort)
+    fi
+else
+    if [ "$uses_s3" = 'true' ]; then
+        upload_manifest s3 "$s3_bucket"
+        s3_upload_count="$target_upload_count"
+        s3_failed_count="$target_failed_count"
+        if [ "$index_markers" = 'true' ] && [ "$s3_failed_count" -eq 0 ]; then
+            refresh_s3_index_markers
         fi
-        # A transient TLS or DNS blip should not cost the whole upload.
-        attempt=1
-        ok='false'
-        while [ "$attempt" -le 3 ]; do
-            if aws s3 cp "${staging}/${rel}" \
-                "s3://${s3_bucket}/${s3_path}/${key}" \
-                "${args[@]}" 2>&1; then
-                ok='true'
-                break
-            fi
-            log_warn "Upload attempt ${attempt} failed for ${key}"
-            attempt=$((attempt + 1))
-            sleep $((attempt * 2))
-        done
-        if [ "$ok" = 'true' ]; then
-            upload_count=$((upload_count + 1))
-        else
-            failed_count=$((failed_count + 1))
-            log_error "Failed to upload ${key}"
+    fi
+    if [ "$uses_r2" = 'true' ]; then
+        if [ "$r2_index" = 'true' ]; then
+            generate_index_pages
         fi
-    done < "$manifest"
-
-    log_info "Uploaded ${upload_count} file(s), ${failed_count} failure(s)"
-
-    # -----------------------------------------------------------------------
-    # Index markers
-    #
-    # S3 has no directories, so the log server regenerates index.html from
-    # object events. Writing and immediately removing a marker in each of
-    # the first three prefixes is what triggers that regeneration.
-    # -----------------------------------------------------------------------
-    if [ "$index_markers" = 'true' ] && [ "$failed_count" -eq 0 ]; then
-        marker="${staging}/_tmpfile"
-        : > "$marker"
-        prefix=''
-        seg_index=0
-        IFS='/' read -r -a segments <<< "$s3_path"
-        for segment in "${segments[@]}"; do
-            [ "$seg_index" -ge 3 ] && break
-            prefix="${prefix}${segment}/"
-            if aws s3 cp "$marker" "s3://${s3_bucket}/${prefix}_tmpfile" \
-                --only-show-errors 2>&1; then
-                aws s3 rm "s3://${s3_bucket}/${prefix}_tmpfile" \
-                    --only-show-errors 2>&1 || true
-                log_info "Refreshed index for ${prefix}"
-            else
-                log_warn "Could not refresh index for ${prefix}"
-            fi
-            seg_index=$((seg_index + 1))
-        done
+        upload_manifest r2 "$r2_bucket"
+        r2_upload_count="$target_upload_count"
+        r2_failed_count="$target_failed_count"
     fi
 fi
 
@@ -418,10 +569,27 @@ fi
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
-log_url=''
+s3_log_url=''
+r2_log_url=''
 if [ -n "$base_url" ] && [ "$uses_s3" = 'true' ]; then
-    log_url="${base_url%/}/${s3_path}/"
+    s3_log_url="${base_url%/}/${s3_path}/"
 fi
+if [ -n "$r2_base_url" ] && [ "$uses_r2" = 'true' ]; then
+    r2_log_url="${r2_base_url%/}/${s3_path}/"
+fi
+# The first destination listed that has a public URL is the primary.
+log_url=''
+for dest in "${remote_order[@]}"; do
+    case "$dest" in
+        s3) candidate="$s3_log_url" ;;
+        r2) candidate="$r2_log_url" ;;
+        *) candidate='' ;;
+    esac
+    if [ -n "$candidate" ]; then
+        log_url="$candidate"
+        break
+    fi
+done
 
 persisted_manifest="${RUNNER_TEMP:-/tmp}/log-publish-manifest.tsv"
 cp -f "$manifest" "$persisted_manifest" 2> /dev/null || true
@@ -430,6 +598,8 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     {
         echo "s3_path=${s3_path}"
         echo "log_url=${log_url}"
+        echo "s3_log_url=${s3_log_url}"
+        echo "r2_log_url=${r2_log_url}"
         echo "file_count=${file_count}"
         echo "upload_count=${upload_count}"
         echo "failed_count=${failed_count}"
@@ -443,10 +613,19 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
         echo '### 🪵 Build logs published'
         echo
-        if [ -n "$log_url" ]; then
-            echo "[Browse logs](${log_url})"
-        elif [ "$uses_s3" = 'true' ]; then
-            echo "\`s3://${s3_bucket}/${s3_path}/\`"
+        if [ "$uses_s3" = 'true' ]; then
+            if [ -n "$s3_log_url" ]; then
+                echo "- S3: [Browse logs](${s3_log_url})"
+            else
+                echo "- S3: \`s3://${s3_bucket}/${s3_path}/\`"
+            fi
+        fi
+        if [ "$uses_r2" = 'true' ]; then
+            if [ -n "$r2_log_url" ]; then
+                echo "- R2: [Browse logs](${r2_log_url})"
+            else
+                echo "- R2: \`r2://${r2_bucket}/${s3_path}/\`"
+            fi
         fi
         if [ "$uses_artifact" = 'true' ] && [ "$dry_run" != 'true' ]; then
             echo "Workflow artifact: \`${artifact_name_output}\`"
@@ -456,9 +635,13 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         echo "- Files collected: ${file_count}"
         if [ "$dry_run" = 'true' ]; then
             echo '- Dry run: no files uploaded'
-        elif [ "$uses_s3" = 'true' ]; then
-            echo "- Uploaded: ${upload_count}"
-            echo "- Failed: ${failed_count}"
+        else
+            if [ "$uses_s3" = 'true' ]; then
+                echo "- S3 uploaded: ${s3_upload_count}, failed: ${s3_failed_count}"
+            fi
+            if [ "$uses_r2" = 'true' ]; then
+                echo "- R2 uploaded: ${r2_upload_count}, failed: ${r2_failed_count}"
+            fi
         fi
     } >> "$GITHUB_STEP_SUMMARY"
 fi

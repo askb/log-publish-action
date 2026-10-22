@@ -6,8 +6,8 @@
 name: '🪵 Publish Build Logs'
 
 description: >-
-  Publishes build logs and test reports to an S3 log server, to GitHub
-  workflow artifacts, or to both
+  Publishes build logs and test reports to an S3 log server, a
+  Cloudflare R2 bucket, GitHub workflow artifacts, or any combination
 # Replicates the Jenkins/JJB post-build log shipping behaviour
 # (global-jjb lf-infra-publish -> logs-deploy.sh -> lftools deploy s3)
 # for GitHub Actions, writing to the same bucket layout so the existing
@@ -22,11 +22,15 @@ inputs:
   # Destination
   destination:
     description: >-
-      Where to publish: s3, artifact, or both. S3 gives anonymously
-      readable URLs and server rendered HTML reports. Artifacts are free
-      but require a GitHub login to download, even on public repos, and
-      arrive as a single zip. Drive this from an organisation variable so
-      a fleet wide move needs one change rather than one per repository.
+      Where to publish: a comma separated list of s3, r2 and artifact,
+      for example 's3', 'r2', 's3,r2' or 'r2,artifact'. The legacy value
+      'both' means 's3,artifact'. S3 and R2 give anonymously readable URLs
+      and browser rendered HTML reports. Artifacts are free but require a
+      GitHub login to download, even on public repos, and arrive as a
+      single zip. When several remote destinations are listed, the first
+      one with a public URL becomes log_url. Drive this from an
+      organisation variable so a fleet wide move needs one change rather
+      than one per repository.
     required: false
     default: 's3'
 
@@ -120,6 +124,49 @@ inputs:
     required: false
     default: 'us-east-1'
 
+  # R2 destination. Uses the same object layout as S3 (s3_path).
+  r2_bucket:
+    description: >-
+      Target Cloudflare R2 bucket. Required when destination includes r2.
+    required: false
+    default: ''
+  r2_account_id:
+    description: >-
+      Cloudflare account id, used to derive the R2 S3 API endpoint
+      https://<account_id>.r2.cloudflarestorage.com.
+    required: false
+    default: ''
+  r2_endpoint_url:
+    description: >-
+      Explicit R2 S3 API endpoint. Overrides r2_account_id, for example
+      to use a jurisdiction specific endpoint.
+    required: false
+    default: ''
+  r2_access_key_id:
+    description: >-
+      R2 API token access key id. Pass from a secret. R2 has no OIDC
+      federation, so a token scoped to Object Read and Write on the
+      bucket is required.
+    required: false
+    default: ''
+  r2_secret_access_key:
+    description: 'R2 API token secret access key. Pass from a secret.'
+    required: false
+    default: ''
+  r2_base_url:
+    description: >-
+      Public base URL of the R2 bucket custom domain, used to build
+      r2_log_url and, when R2 is primary, log_url.
+    required: false
+    default: ''
+  r2_index:
+    description: >-
+      Write an index.html into every directory of the published tree on
+      R2, which has no server side listing. Directories that already
+      contain an index.html, such as Allure reports, keep their own.
+    required: false
+    default: 'true'
+
   # Artifact destination
   artifact_name:
     description: >-
@@ -144,7 +191,8 @@ inputs:
     default: ''
   dry_run:
     description: >-
-      Collect, compress and build the manifest, but perform no S3 calls.
+      Collect, compress and build the manifest, but perform no S3 or R2
+      calls.
       Used by the test suite and for local verification.
     required: false
     default: 'false'
@@ -161,8 +209,15 @@ outputs:
     description: 'Resolved path within the bucket'
     value: "${{ steps.publish.outputs.s3_path }}"
   log_url:
-    description: 'Public URL of the published directory'
+    description: >-
+      Public URL of the published directory on the primary destination
     value: "${{ steps.publish.outputs.log_url }}"
+  s3_log_url:
+    description: 'Public URL of the S3 copy, empty when not published'
+    value: "${{ steps.publish.outputs.s3_log_url }}"
+  r2_log_url:
+    description: 'Public URL of the R2 copy, empty when not published'
+    value: "${{ steps.publish.outputs.r2_log_url }}"
   file_count:
     description: 'Number of files collected'
     value: "${{ steps.publish.outputs.file_count }}"
@@ -197,6 +252,12 @@ runs:
         INPUT_PATH_PREFIX: "${{ inputs.path_prefix }}"
         INPUT_NAMESPACE: "${{ inputs.namespace }}"
         INPUT_CAPTURE_CONSOLE: "${{ inputs.capture_console }}"
+        INPUT_R2_BUCKET: "${{ inputs.r2_bucket }}"
+        INPUT_R2_ACCOUNT_ID: "${{ inputs.r2_account_id }}"
+        INPUT_R2_ENDPOINT_URL: "${{ inputs.r2_endpoint_url }}"
+        INPUT_R2_ACCESS_KEY_ID: "${{ inputs.r2_access_key_id }}"
+        INPUT_R2_SECRET_ACCESS_KEY: "${{ inputs.r2_secret_access_key }}"
+        INPUT_R2_INDEX: "${{ inputs.r2_index }}"
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
       run: |
@@ -222,6 +283,13 @@ runs:
         INPUT_INDEX_MARKERS: "${{ inputs.index_markers }}"
         INPUT_BASE_URL: "${{ inputs.base_url }}"
         INPUT_AWS_REGION: "${{ inputs.aws_region }}"
+        INPUT_R2_BUCKET: "${{ inputs.r2_bucket }}"
+        INPUT_R2_ACCOUNT_ID: "${{ inputs.r2_account_id }}"
+        INPUT_R2_ENDPOINT_URL: "${{ inputs.r2_endpoint_url }}"
+        INPUT_R2_ACCESS_KEY_ID: "${{ inputs.r2_access_key_id }}"
+        INPUT_R2_SECRET_ACCESS_KEY: "${{ inputs.r2_secret_access_key }}"
+        INPUT_R2_BASE_URL: "${{ inputs.r2_base_url }}"
+        INPUT_R2_INDEX: "${{ inputs.r2_index }}"
         INPUT_ARTIFACT_NAME: "${{ inputs.artifact_name }}"
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
@@ -229,14 +297,14 @@ runs:
       run: |
         bash "$GITHUB_ACTION_PATH/scripts/publish-logs.sh"
 
-    # Runs whenever the staged tree survived, which the script arranges
-    # for the artifact and both destinations. Guarded on the path rather
-    # than the destination alone so a collection failure cannot turn into
-    # a confusing upload-artifact error.
+    # Runs whenever the script handed over a staged tree for an artifact.
+    # The script parses the destination list, so key off its outputs
+    # rather than re-parsing here, which also keeps a collection failure
+    # from turning into a confusing upload-artifact error.
     - name: 'Upload logs as workflow artifact'
       if: >-
-        ${{ (inputs.destination == 'artifact' || inputs.destination == 'both')
-        && inputs.dry_run != 'true'
+        ${{ inputs.dry_run != 'true'
+        && steps.publish.outputs.artifact_name != ''
         && steps.publish.outputs.staging_dir != '' }}
       # yamllint disable-line rule:line-length
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2

@@ -411,7 +411,7 @@ ws="$(make_workspace)"
 
 out="$(INPUT_S3_BUCKET='logs-example-org' INPUT_DESTINATION='ftp' \
     bash "$VALIDATE" 2>&1 || true)"
-assert_contains "$out" 'destination must be s3, artifact or both' \
+assert_contains "$out" 'destination must list s3, r2, artifact or both' \
     'unknown destination is rejected'
 
 # The point of the artifact destination is that it needs no S3 at all:
@@ -478,6 +478,141 @@ staged="$(output_field "$outputs" 'staging_dir')"
 [ -n "$staged" ] && rm -rf "$staged"
 
 rm -rf "$ws"
+
+# ---------------------------------------------------------------------------
+echo
+echo '▶ R2 destination'
+# ---------------------------------------------------------------------------
+ws="$(make_workspace)"
+r2_acct='0123456789abcdef0123456789abcdef'
+
+out="$(INPUT_DESTINATION='r2' INPUT_DRY_RUN='true' bash "$VALIDATE" 2>&1 ||
+    true)"
+assert_contains "$out" 'r2_bucket is required' 'r2 requires a bucket'
+
+out="$(INPUT_DESTINATION='r2' INPUT_R2_BUCKET='odl-logs' INPUT_DRY_RUN='true' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'r2_account_id' 'r2 requires an account or endpoint'
+
+out="$(INPUT_DESTINATION='r2' INPUT_R2_BUCKET='odl-logs' \
+    INPUT_R2_ENDPOINT_URL='http://insecure.example' INPUT_DRY_RUN='true' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'must be an https URL' 'r2 endpoint must be https'
+
+out="$(INPUT_DESTINATION='r2' INPUT_R2_BUCKET='odl-logs' \
+    INPUT_R2_ACCOUNT_ID="$r2_acct" INPUT_DRY_RUN='false' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'r2_secret_access_key are required' \
+    'r2 requires credentials for a real run'
+
+# R2 alone needs no S3 bucket.
+out="$(INPUT_DESTINATION='r2' INPUT_S3_BUCKET='' INPUT_R2_BUCKET='odl-logs' \
+    INPUT_R2_ACCOUNT_ID="$r2_acct" INPUT_DRY_RUN='true' \
+    bash "$VALIDATE" 2>&1)"
+assert_contains "$out" 'validated' 'r2 destination needs no s3 bucket'
+
+out="$(INPUT_DESTINATION='s3, r2,artifact' INPUT_S3_BUCKET='logs-example-org' \
+    INPUT_R2_BUCKET='odl-logs' INPUT_R2_ACCOUNT_ID="$r2_acct" \
+    INPUT_DRY_RUN='true' bash "$VALIDATE" 2>&1)"
+assert_contains "$out" 'validated' 'mixed comma and space list is accepted'
+
+out="$(INPUT_DESTINATION='s3,gcs' INPUT_S3_BUCKET='logs-example-org' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'destination must list' 'unknown list member rejected'
+
+# Dry run renders index pages but never overwrites a report's own.
+out="$(run_publish "$ws" 'INPUT_DESTINATION=r2' 'INPUT_R2_BUCKET=odl-logs' \
+    "INPUT_R2_ACCOUNT_ID=$r2_acct" 'INPUT_ARCHIVE_PATTERNS=allure-report/**')"
+assert_contains "$out" 'r2://odl-logs/logs/gha/yangtools' 'r2 target is logged'
+pages="$(printf '%s' "$out" | sed -n '/^--- r2 index pages ---$/,$p')"
+assert_contains "$pages" $'\nindex.html' 'root index page is generated'
+assert_contains "$pages" 'allure-report/data/index.html' \
+    'nested index page is generated'
+assert_not_contains "$pages" 'allure-report/index.html' \
+    'existing report index.html is preserved'
+staged="$(printf '%s' "$out" | sed -n 's/^staging-dir: //p' | head -1)"
+[ -n "$staged" ] && rm -rf "$staged"
+
+# A stub aws records every call, with the credentials and endpoint it ran
+# under, so routing can be verified without any network access.
+stub_dir="$(mktemp -d -t lpa-aws.XXXXXXXX)"
+calls="${stub_dir}/calls.log"
+cat > "${stub_dir}/aws" << 'STUB'
+#!/usr/bin/env bash
+printf '%s|%s|%s|%s\n' "${AWS_ACCESS_KEY_ID:-}" "${AWS_SESSION_TOKEN:-}" \
+    "${AWS_REGION:-}" "$*" >> "$LPA_CALLS"
+STUB
+chmod +x "${stub_dir}/aws"
+
+tmp_out="$(mktemp -t lpa-gho.XXXXXXXX)"
+tmp_sum="$(mktemp -t lpa-sum.XXXXXXXX)"
+run_publish "$ws" 'INPUT_DRY_RUN=false' 'INPUT_DESTINATION=r2,s3' \
+    "PATH=${stub_dir}:${PATH}" "LPA_CALLS=${calls}" \
+    'AWS_ACCESS_KEY_ID=AKIAOIDCSESSION' 'AWS_SESSION_TOKEN=oidc-session' \
+    'INPUT_R2_BUCKET=odl-logs' "INPUT_R2_ACCOUNT_ID=$r2_acct" \
+    'INPUT_R2_ACCESS_KEY_ID=r2-key-id' 'INPUT_R2_SECRET_ACCESS_KEY=r2-secret' \
+    'INPUT_R2_BASE_URL=https://logs-r2.example.org' \
+    "GITHUB_OUTPUT=$tmp_out" "GITHUB_STEP_SUMMARY=$tmp_sum" > /dev/null 2>&1
+log="$(cat "$calls" 2> /dev/null)"
+outputs="$(cat "$tmp_out" 2> /dev/null)"
+summary="$(cat "$tmp_sum" 2> /dev/null)"
+
+r2_calls="$(grep -F 'r2.cloudflarestorage.com' <<< "$log")"
+s3_calls="$(grep -vF 'r2.cloudflarestorage.com' <<< "$log")"
+assert_contains "$r2_calls" \
+    "--endpoint-url https://${r2_acct}.r2.cloudflarestorage.com s3 cp" \
+    'r2 uploads use the account endpoint'
+assert_contains "$r2_calls" 's3://odl-logs/logs/gha/yangtools/' \
+    'r2 uploads target the r2 bucket and shared layout'
+assert_contains "$r2_calls" 'r2-key-id||auto|' \
+    'r2 uploads use the r2 token, no session token, region auto'
+assert_not_contains "$r2_calls" 'AKIAOIDCSESSION' \
+    'r2 uploads never see the aws session'
+assert_contains "$r2_calls" '/index.html --content-type text/html' \
+    'r2 receives generated index pages'
+assert_contains "$s3_calls" 'AKIAOIDCSESSION|oidc-session|us-east-1|s3 cp' \
+    's3 uploads keep the oidc session'
+assert_contains "$s3_calls" 's3://logs-example-org/logs/gha/yangtools/' \
+    's3 uploads target the s3 bucket'
+assert_not_contains "$s3_calls" 'r2-key-id' 's3 uploads never see the r2 token'
+assert_contains "$s3_calls" '_tmpfile' 's3 still receives index markers'
+assert_not_contains "$s3_calls" '/index.html --content-type' \
+    's3 does not receive generated index pages'
+assert_contains "$outputs" \
+    'log_url=https://logs-r2.example.org/logs/gha/yangtools/' \
+    'first listed destination (r2) is the primary log_url'
+assert_contains "$outputs" 's3_log_url=https://logs.example.org/logs/gha/' \
+    's3_log_url output set'
+assert_contains "$outputs" 'r2_log_url=https://logs-r2.example.org/logs/' \
+    'r2_log_url output set'
+assert_contains "$outputs" 'failed_count=0' 'dual publish reports no failures'
+assert_contains "$summary" '- R2: [Browse logs]' 'summary links the r2 copy'
+assert_contains "$summary" '- S3: [Browse logs]' 'summary links the s3 copy'
+
+# Order decides the primary.
+: > "$calls"
+outputs="$(run_publish_outputs "$ws" 'INPUT_DRY_RUN=false' \
+    'INPUT_DESTINATION=s3,r2' "PATH=${stub_dir}:${PATH}" \
+    "LPA_CALLS=${calls}" 'INPUT_R2_BUCKET=odl-logs' \
+    "INPUT_R2_ACCOUNT_ID=$r2_acct" 'INPUT_R2_ACCESS_KEY_ID=k' \
+    'INPUT_R2_SECRET_ACCESS_KEY=s' \
+    'INPUT_R2_BASE_URL=https://logs-r2.example.org')"
+assert_contains "$outputs" 'log_url=https://logs.example.org/logs/gha/' \
+    'first listed destination (s3) is the primary log_url'
+
+# Index generation can be turned off.
+: > "$calls"
+run_publish "$ws" 'INPUT_DRY_RUN=false' 'INPUT_DESTINATION=r2' \
+    "PATH=${stub_dir}:${PATH}" "LPA_CALLS=${calls}" \
+    'INPUT_R2_BUCKET=odl-logs' "INPUT_R2_ACCOUNT_ID=$r2_acct" \
+    'INPUT_R2_ACCESS_KEY_ID=k' 'INPUT_R2_SECRET_ACCESS_KEY=s' \
+    'INPUT_R2_INDEX=false' > /dev/null 2>&1
+log="$(cat "$calls" 2> /dev/null)"
+assert_not_contains "$log" '/index.html --content-type' \
+    'r2_index=false skips generated pages'
+assert_not_contains "$log" '_tmpfile' 'r2 never writes s3 index markers'
+
+rm -rf "$stub_dir" "$tmp_out" "$tmp_sum" "$ws"
 
 # ---------------------------------------------------------------------------
 echo
