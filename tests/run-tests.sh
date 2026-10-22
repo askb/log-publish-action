@@ -560,6 +560,8 @@ evil_dir="$evil_ws/archives/report"$'\n'"row"$'\t'".."
 mkdir -p "$evil_dir"
 echo 'x' > "$evil_dir/result.log"
 echo 'x' > "$evil_ws/archives/suite\\result.log"
+mkdir -p "$evil_ws/archives/report\\new"
+echo 'x' > "$evil_ws/archives/report\\new/result.log"
 priv_tmp="$(mktemp -d -t lpa-tmp.XXXXXXXX)"
 out="$(run_publish "$evil_ws" 'INPUT_DESTINATION=r2' \
     'INPUT_R2_BUCKET=odl-logs' "INPUT_R2_ACCOUNT_ID=$r2_acct" \
@@ -577,6 +579,8 @@ fi
 idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
 assert_contains "$(cat "${idx}/index.html" 2> /dev/null)" \
     'href="./suite%5Cresult.log"' 'backslash is percent-encoded in links'
+assert_contains "$(cat "${idx}/report\\new/index.html" 2> /dev/null)" \
+    'href="./result.log"' 'directory with a backslash still lists its files'
 rm -rf "$priv_tmp" "$evil_ws"
 
 # A stub aws records every call, with the credentials and endpoint it ran
