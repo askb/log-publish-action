@@ -530,7 +530,20 @@ assert_contains "$pages" 'allure-report/data/index.html' \
     'nested index page is generated'
 assert_not_contains "$pages" 'allure-report/index.html' \
     'existing report index.html is preserved'
+idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
+root_page="$(cat "${idx}/index.html" 2> /dev/null)"
+assert_contains "$root_page" '<a href="karaf.log">karaf.log</a>' \
+    'root index links a top level file'
+assert_contains "$root_page" '<a href="allure-report/">allure-report/</a>' \
+    'root index links a subdirectory'
+assert_not_contains "$root_page" 'href=""' 'root index has no empty links'
+assert_not_contains "$root_page" 'href="../"' 'root index has no parent link'
+data_page="$(cat "${idx}/allure-report/data/index.html" 2> /dev/null)"
+assert_contains "$data_page" '<a href="suites.json">suites.json</a>' \
+    'nested index links its files'
+assert_contains "$data_page" 'href="../"' 'nested index links its parent'
 staged="$(printf '%s' "$out" | sed -n 's/^staging-dir: //p' | head -1)"
+case "$idx" in */log-publish.*.index) rm -rf "$idx" ;; esac
 [ -n "$staged" ] && rm -rf "$staged"
 
 # A stub aws records every call, with the credentials and endpoint it ran

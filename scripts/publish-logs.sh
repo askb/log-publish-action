@@ -305,11 +305,13 @@ generate_index_pages() {
             echo "<title>Index of ${title}</title></head><body>"
             echo "<h1>Index of ${title}</h1><ul>"
             [ -n "$dir" ] && echo '<li><a href="../">../</a></li>'
-            while IFS=$'\t' read -r _ kind name; do
+            # Emit just kind and name: root rows have an empty first
+            # column, and read would collapse that leading tab.
+            while IFS=$'\t' read -r kind name; do
                 [ "$kind" = 'd' ] && name="${name}/"
                 echo "<li><a href=\"$(href_escape "$name")\">$(html_escape "$name")</a></li>"
-            done < <(awk -F'\t' -v d="$dir" '$1 == d' "${index_dir}.rows" |
-                sort -t$'\t' -k2,2 -k3,3)
+            done < <(awk -F'\t' -v d="$dir" -v OFS='\t' '$1 == d {print $2, $3}' \
+                "${index_dir}.rows" | sort -t$'\t' -k1,1 -k2,2)
             echo '</ul></body></html>'
         } > "$page"
     done < <(cut -f1 "${index_dir}.rows" | sort -u)
@@ -353,12 +355,12 @@ index_dir="${staging}.index"
 
 cleanup() {
     rm -f "$manifest" 2> /dev/null || true
-    rm -rf "$index_dir" 2> /dev/null || true
-    # A dry run exists to be inspected, so the staged tree is left in
-    # place and its location reported.
+    # A dry run exists to be inspected, so the staged tree and any
+    # generated index pages are left in place and their location reported.
     if [ "$dry_run" = 'true' ]; then
         return 0
     fi
+    rm -rf "$index_dir" 2> /dev/null || true
     # The artifact destination uploads the staged tree from a later
     # composite step, which cannot run if this script removes it. That
     # step owns the cleanup instead.
@@ -527,6 +529,7 @@ if [ "$dry_run" = 'true' ]; then
     cat "$manifest"
     if [ "$uses_r2" = 'true' ] && [ "$r2_index" = 'true' ]; then
         generate_index_pages
+        log_info "index-dir: ${index_dir}"
         log_info '--- r2 index pages ---'
         (cd "$index_dir" && find . -type f -name index.html | sed 's|^\./||' | sort)
     fi
