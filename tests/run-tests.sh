@@ -552,6 +552,33 @@ staged="$(printf '%s' "$out" | sed -n 's/^staging-dir: //p' | head -1)"
 case "$idx" in */log-publish.*.index) rm -rf "$idx" ;; esac
 [ -n "$staged" ] && rm -rf "$staged"
 
+# A path with a tab or newline must never reach the line based
+# manifest. This one would otherwise yield a '../' directory row and
+# write an index page outside the generated tree.
+evil_ws="$(make_workspace)"
+evil_dir="$evil_ws/archives/report"$'\n'"row"$'\t'".."
+mkdir -p "$evil_dir"
+echo 'x' > "$evil_dir/result.log"
+echo 'x' > "$evil_ws/archives/suite\\result.log"
+priv_tmp="$(mktemp -d -t lpa-tmp.XXXXXXXX)"
+out="$(run_publish "$evil_ws" 'INPUT_DESTINATION=r2' \
+    'INPUT_R2_BUCKET=odl-logs' "INPUT_R2_ACCOUNT_ID=$r2_acct" \
+    "TMPDIR=$priv_tmp")"
+assert_contains "$out" 'Skipping file with control characters' \
+    'control characters in a path are rejected'
+assert_not_contains "$out" 'result.log	result.log' \
+    'control character path stays out of the manifest'
+if [ -e "${priv_tmp}/index.html" ]; then
+    ko 'no index page is written outside the generated tree' \
+        "${priv_tmp}/index.html exists"
+else
+    ok 'no index page is written outside the generated tree'
+fi
+idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
+assert_contains "$(cat "${idx}/index.html" 2> /dev/null)" \
+    'href="./suite%5Cresult.log"' 'backslash is percent-encoded in links'
+rm -rf "$priv_tmp" "$evil_ws"
+
 # A stub aws records every call, with the credentials and endpoint it ran
 # under, so routing can be verified without any network access.
 stub_dir="$(mktemp -d -t lpa-aws.XXXXXXXX)"

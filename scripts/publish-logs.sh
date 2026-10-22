@@ -270,8 +270,9 @@ html_escape() {
         -e 's/"/\&quot;/g' <<< "$1"
 }
 
+# Browsers treat a backslash in an https URL as a slash, so encode it.
 href_escape() {
-    sed -e 's/%/%25/g' -e 's/ /%20/g' -e 's/#/%23/g' -e 's/?/%3F/g' \
+    sed -e 's/%/%25/g' -e 's/\\/%5C/g' -e 's/ /%20/g' -e 's/#/%23/g' -e 's/?/%3F/g' \
         -e 's/&/\&amp;/g' -e 's/"/%22/g' -e 's/</%3C/g' -e 's/>/%3E/g' \
         <<< "$1"
 }
@@ -293,6 +294,14 @@ generate_index_pages() {
         }
     }' | sort -u > "${index_dir}.rows"
     while IFS= read -r dir; do
+        # Defence in depth: the manifest already excludes control
+        # characters, but never let a row steer a page outside the tree.
+        case "/${dir}" in
+            */../* | */./*)
+                log_warn "Skipping index for unsafe directory: ${dir}"
+                continue
+                ;;
+        esac
         if grep -qxF -- "${dir}index.html" < <(cut -f2 "$manifest"); then
             continue
         fi
@@ -489,6 +498,15 @@ fi
 # ---------------------------------------------------------------------------
 while IFS= read -r -d '' src; do
     rel="${src#"${staging}/"}"
+    # The manifest is tab separated and line based, so a tab, newline or
+    # other control character in a path would corrupt it and could steer
+    # later stages to the wrong key. Such names are never legitimate
+    # build output; drop them.
+    if [[ "$rel" =~ [[:cntrl:]] ]]; then
+        log_warn "Skipping file with control characters: $(printf '%q' "$rel")"
+        rm -f "$src"
+        continue
+    fi
     encoding=''
     key="$rel"
 
