@@ -320,8 +320,9 @@ outputs="$(cat "$tmp_out" 2> /dev/null)"
 summary="$(cat "$tmp_sum" 2> /dev/null)"
 
 assert_contains "$outputs" 's3_path=logs/gha/yangtools' 's3_path output set'
-assert_contains "$outputs" \
-    'log_url=https://logs.example.org/logs/gha/yangtools' 'log_url output set'
+# Exact fields: a substring check on log_url= also matches s3_log_url=.
+assert_eq "$(output_field "$outputs" 'log_url')" \
+    'https://logs.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 'log_url output set'
 assert_contains "$outputs" 'file_count=' 'file_count output set'
 assert_contains "$summary" 'Build logs published' 'step summary written'
 
@@ -596,13 +597,13 @@ assert_not_contains "$s3_calls" 'r2-key-id' 's3 uploads never see the r2 token'
 assert_contains "$s3_calls" '_tmpfile' 's3 still receives index markers'
 assert_not_contains "$s3_calls" '/index.html --content-type' \
     's3 does not receive generated index pages'
-assert_contains "$outputs" \
-    'log_url=https://logs-r2.example.org/logs/gha/yangtools/' \
+assert_eq "$(output_field "$outputs" 'log_url')" \
+    'https://logs-r2.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' \
     'first listed destination (r2) is the primary log_url'
-assert_contains "$outputs" 's3_log_url=https://logs.example.org/logs/gha/' \
-    's3_log_url output set'
-assert_contains "$outputs" 'r2_log_url=https://logs-r2.example.org/logs/' \
-    'r2_log_url output set'
+assert_eq "$(output_field "$outputs" 's3_log_url')" \
+    'https://logs.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 's3_log_url output set'
+assert_eq "$(output_field "$outputs" 'r2_log_url')" \
+    'https://logs-r2.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 'r2_log_url output set'
 assert_contains "$outputs" 'failed_count=0' 'dual publish reports no failures'
 assert_contains "$summary" '- R2: [Browse logs]' 'summary links the r2 copy'
 assert_contains "$summary" '- S3: [Browse logs]' 'summary links the s3 copy'
@@ -615,7 +616,8 @@ outputs="$(run_publish_outputs "$ws" 'INPUT_DRY_RUN=false' \
     "INPUT_R2_ACCOUNT_ID=$r2_acct" 'INPUT_R2_ACCESS_KEY_ID=k' \
     'INPUT_R2_SECRET_ACCESS_KEY=s' \
     'INPUT_R2_BASE_URL=https://logs-r2.example.org')"
-assert_contains "$outputs" 'log_url=https://logs.example.org/logs/gha/' \
+assert_eq "$(output_field "$outputs" 'log_url')" \
+    'https://logs.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' \
     'first listed destination (s3) is the primary log_url'
 
 # Index generation can be turned off.
