@@ -309,7 +309,9 @@ generate_index_pages() {
             # column, and read would collapse that leading tab.
             while IFS=$'\t' read -r kind name; do
                 [ "$kind" = 'd' ] && name="${name}/"
-                echo "<li><a href=\"$(href_escape "$name")\">$(html_escape "$name")</a></li>"
+                # The ./ prefix keeps a name such as javascript:x.log a
+                # relative path rather than a URL scheme.
+                echo "<li><a href=\"./$(href_escape "$name")\">$(html_escape "$name")</a></li>"
             done < <(awk -F'\t' -v d="$dir" -v OFS='\t' '$1 == d {print $2, $3}' \
                 "${index_dir}.rows" | sort -t$'\t' -k1,1 -k2,2)
             echo '</ul></body></html>'

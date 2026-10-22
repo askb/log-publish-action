@@ -521,6 +521,7 @@ out="$(INPUT_DESTINATION='s3,gcs' INPUT_S3_BUCKET='logs-example-org' \
 assert_contains "$out" 'destination must list' 'unknown list member rejected'
 
 # Dry run renders index pages but never overwrites a report's own.
+echo 'x' > "$ws/archives/javascript:alert(1).log"
 out="$(run_publish "$ws" 'INPUT_DESTINATION=r2' 'INPUT_R2_BUCKET=odl-logs' \
     "INPUT_R2_ACCOUNT_ID=$r2_acct" 'INPUT_ARCHIVE_PATTERNS=allure-report/**')"
 assert_contains "$out" 'r2://odl-logs/logs/gha/yangtools' 'r2 target is logged'
@@ -532,14 +533,18 @@ assert_not_contains "$pages" 'allure-report/index.html' \
     'existing report index.html is preserved'
 idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
 root_page="$(cat "${idx}/index.html" 2> /dev/null)"
-assert_contains "$root_page" '<a href="karaf.log">karaf.log</a>' \
+assert_contains "$root_page" '<a href="./karaf.log">karaf.log</a>' \
     'root index links a top level file'
-assert_contains "$root_page" '<a href="allure-report/">allure-report/</a>' \
+assert_contains "$root_page" '<a href="./allure-report/">allure-report/</a>' \
     'root index links a subdirectory'
 assert_not_contains "$root_page" 'href=""' 'root index has no empty links'
+assert_contains "$root_page" 'href="./javascript:alert(1).log"' \
+    'scheme-like file name stays a relative link'
+assert_not_contains "$root_page" 'href="javascript:' \
+    'file name cannot inject a javascript: URL'
 assert_not_contains "$root_page" 'href="../"' 'root index has no parent link'
 data_page="$(cat "${idx}/allure-report/data/index.html" 2> /dev/null)"
-assert_contains "$data_page" '<a href="suites.json">suites.json</a>' \
+assert_contains "$data_page" '<a href="./suites.json">suites.json</a>' \
     'nested index links its files'
 assert_contains "$data_page" 'href="../"' 'nested index links its parent'
 staged="$(printf '%s' "$out" | sed -n 's/^staging-dir: //p' | head -1)"
