@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -105,10 +106,24 @@ def install_boto3(requirements: Path = REQUIREMENTS) -> None:
         ]
         result = subprocess.run(cmd, check=False, capture_output=True, text=True)
         if result.returncode != 0:
+            shutil.rmtree(target, ignore_errors=True)
             raise RuntimeError(f"pip install failed:\n{result.stderr.strip()}")
         _installed[requirements] = target
     if str(target) not in sys.path:
         sys.path.insert(0, str(target))
+
+
+def remove_boto3() -> None:
+    """Delete the installs made by install_boto3, once every upload is done.
+
+    RUNNER_TEMP is wiped per job, but without it the install lands in the
+    system temp directory and would otherwise leak on every run.
+    """
+    for target in _installed.values():
+        shutil.rmtree(target, ignore_errors=True)
+        if str(target) in sys.path:
+            sys.path.remove(str(target))
+    _installed.clear()
 
 
 def _module(name: str) -> object:

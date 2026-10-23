@@ -233,6 +233,30 @@ def test_install_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     assert target != planted.parent
     assert sys.path[0] == str(target)
     assert str(planted.parent) not in sys.path
+    upload.remove_boto3()
+    assert not target.exists()
+    assert str(target) not in sys.path
+    assert planted.exists(), "only this process's own install is removed"
+
+
+def test_failed_install_leaves_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Failed:
+        returncode: int = 1
+        stderr: str = "no matching distribution"
+
+    def fake_run(_cmd: list[str], **_kwargs: object) -> Failed:
+        return Failed()
+
+    runner_temp = tmp_path / "runner"
+    runner_temp.mkdir()
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
+    monkeypatch.setattr(upload, "_installed", {})
+    with pytest.raises(RuntimeError, match="no matching distribution"):
+        upload.install_boto3()
+    assert list(runner_temp.iterdir()) == []
 
 
 def test_requirements_are_pinned_and_hashed() -> None:

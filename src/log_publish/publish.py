@@ -23,6 +23,7 @@ from .upload import (
     Staged,
     default_factory,
     publish_target,
+    remove_boto3,
 )
 
 
@@ -89,6 +90,7 @@ def run(
             shutil.rmtree(index_dir, ignore_errors=True)
         if not keep_staging:
             shutil.rmtree(staging, ignore_errors=True)
+        remove_boto3()
 
     staging_out = str(staging) if keep_staging else ""
     artifact_out = cfg.artifact_name if dest.artifact and not dry_run else ""
