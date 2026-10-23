@@ -88,10 +88,12 @@ def _bracket(pattern: str, start: int) -> tuple[str, int] | None:
             i += 1
             ch = pattern[i]
         if pattern[i + 1 : i + 2] == "-" and pattern[i + 2 : i + 3] not in ("", "]"):
-            high = pattern[i + 2]
+            high, end = pattern[i + 2], i + 3
+            if high == "\\" and end < len(pattern):
+                high, end = pattern[end], end + 1
             if ch <= high:
                 items.append(f"{re.escape(ch)}-{re.escape(high)}")
-            i += 3
+            i = end
             continue
         items.append(re.escape(ch))
         i += 1

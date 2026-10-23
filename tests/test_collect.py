@@ -285,6 +285,23 @@ class TestGlob:
             _ = (tmp_path / name).write_text(name)
         assert self.rels(tmp_path, pattern) == expected
 
+    @pytest.mark.parametrize(
+        ("pattern", "expected"),
+        [
+            ("test[a-\\z].log", {"testa.log", "testm.log", "testz.log"}),
+            ("test[\\a-\\z].log", {"testa.log", "testm.log", "testz.log"}),
+            ("test[Z-\\]].log", {"test\\.log", "test].log"}),
+            ("test[a-\\]].log", set[str]()),
+        ],
+    )
+    def test_escaped_range_endpoints(
+        self, tmp_path: Path, pattern: str, expected: set[str]
+    ) -> None:
+        names = ("testa.log", "testm.log", "testz.log", "test].log", "test\\.log")
+        for name in (*names, "test^.log", "test_.log"):
+            _ = (tmp_path / name).write_text(name)
+        assert self.rels(tmp_path, pattern) == expected
+
     def test_globstar_does_not_follow_dir_links(self, tree: Path) -> None:
         os.symlink(tree / "d", tree / "loop")
         assert not any(r.startswith("loop/") for r in self.rels(tree, "**/*.log"))
