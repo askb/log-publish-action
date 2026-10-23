@@ -269,8 +269,8 @@ runs:
       # The runner's own python3; the action needs no setup-python step.
       # -I and -E -s keep PYTHON* variables and user site packages out,
       # so no sitecustomize from the caller runs with these secrets.
-      # main.py keeps -E -s: -I would also drop its own directory, the
-      # action's src/, from the import path on Python 3.10.
+      # main.py keeps -E -s: -I would also drop the script's own
+      # directory (the action's src/) from sys.path.
       run: |
         if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))'
         then
