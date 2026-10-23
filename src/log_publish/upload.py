@@ -78,6 +78,9 @@ def install_boto3(requirements: Path = REQUIREMENTS) -> None:
         info("Installing boto3 (hash pinned) ...")
         cmd = [
             sys.executable,
+            # Isolated: a pip module in the working directory, user site
+            # packages or PYTHON* variables cannot replace the real pip.
+            "-I",
             "-m",
             "pip",
             "install",

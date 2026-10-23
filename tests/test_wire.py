@@ -200,6 +200,7 @@ def test_install_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.setattr(sys, "path", list(sys.path))
     upload.install_boto3()
     cmd = calls[0]
+    assert cmd[1:4] == ["-I", "-m", "pip"]
     for flag in ("--require-hashes", "--no-deps", "--only-binary=:all:"):
         assert flag in cmd
     target = Path(cmd[cmd.index("--target") + 1])
