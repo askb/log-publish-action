@@ -254,6 +254,8 @@ repos:
     rev: a11caebebdbf797e1e96611123db279b334a7675  # frozen: 1.40.2
     hooks:
       - id: basedpyright
+        # The tests import pytest; keep in step with uv.lock.
+        additional_dependencies: ["pytest==9.1.1"]
 
   - repo: https://github.com/lfreleng-actions/gha-workflow-linter
     rev: 7bfe053dbc93ece6793014c594dfaf87c8712c47  # frozen: v1.8.3
