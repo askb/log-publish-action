@@ -150,6 +150,15 @@ output_field() {
     printf '%s' "$1" | sed -n "s/^${2}=//p" | head -1
 }
 
+# Print a generated R2 index page by its object key. Pages are stored
+# under flat names, so look the key up in pages.tsv.
+index_page() {
+    local page
+    page="$(LPA_KEY="$2" awk -F'\t' '$2 == ENVIRON["LPA_KEY"] {print $1}' \
+        "$1/pages.tsv" 2> /dev/null)"
+    [ -n "$page" ] && cat "$page" 2> /dev/null
+}
+
 # Extract one manifest column for a staged path.
 manifest_field() {
     local output="$1" rel="$2" col="$3"
@@ -320,8 +329,9 @@ outputs="$(cat "$tmp_out" 2> /dev/null)"
 summary="$(cat "$tmp_sum" 2> /dev/null)"
 
 assert_contains "$outputs" 's3_path=logs/gha/yangtools' 's3_path output set'
-assert_contains "$outputs" \
-    'log_url=https://logs.example.org/logs/gha/yangtools' 'log_url output set'
+# Exact fields: a substring check on log_url= also matches s3_log_url=.
+assert_eq "$(output_field "$outputs" 'log_url')" \
+    'https://logs.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 'log_url output set'
 assert_contains "$outputs" 'file_count=' 'file_count output set'
 assert_contains "$summary" 'Build logs published' 'step summary written'
 
@@ -411,7 +421,7 @@ ws="$(make_workspace)"
 
 out="$(INPUT_S3_BUCKET='logs-example-org' INPUT_DESTINATION='ftp' \
     bash "$VALIDATE" 2>&1 || true)"
-assert_contains "$out" 'destination must be s3, artifact or both' \
+assert_contains "$out" 'destination must list s3, r2, artifact or both' \
     'unknown destination is rejected'
 
 # The point of the artifact destination is that it needs no S3 at all:
@@ -478,6 +488,213 @@ staged="$(output_field "$outputs" 'staging_dir')"
 [ -n "$staged" ] && rm -rf "$staged"
 
 rm -rf "$ws"
+
+# ---------------------------------------------------------------------------
+echo
+echo '▶ R2 destination'
+# ---------------------------------------------------------------------------
+ws="$(make_workspace)"
+r2_acct='0123456789abcdef0123456789abcdef'
+
+out="$(INPUT_DESTINATION='r2' INPUT_DRY_RUN='true' bash "$VALIDATE" 2>&1 ||
+    true)"
+assert_contains "$out" 'r2_bucket is required' 'r2 requires a bucket'
+
+out="$(INPUT_DESTINATION='r2' INPUT_R2_BUCKET='odl-logs' INPUT_DRY_RUN='true' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'r2_account_id' 'r2 requires an account or endpoint'
+
+out="$(INPUT_DESTINATION='r2' INPUT_R2_BUCKET='odl-logs' \
+    INPUT_R2_ENDPOINT_URL='http://insecure.example' INPUT_DRY_RUN='true' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'must be an https URL' 'r2 endpoint must be https'
+
+out="$(INPUT_DESTINATION='r2' INPUT_R2_BUCKET='odl-logs' \
+    INPUT_R2_ACCOUNT_ID="$r2_acct" INPUT_DRY_RUN='false' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'r2_secret_access_key are required' \
+    'r2 requires credentials for a real run'
+
+# R2 alone needs no S3 bucket.
+out="$(INPUT_DESTINATION='r2' INPUT_S3_BUCKET='' INPUT_R2_BUCKET='odl-logs' \
+    INPUT_R2_ACCOUNT_ID="$r2_acct" INPUT_DRY_RUN='true' \
+    bash "$VALIDATE" 2>&1)"
+assert_contains "$out" 'validated' 'r2 destination needs no s3 bucket'
+
+out="$(INPUT_DESTINATION='s3, r2,artifact' INPUT_S3_BUCKET='logs-example-org' \
+    INPUT_R2_BUCKET='odl-logs' INPUT_R2_ACCOUNT_ID="$r2_acct" \
+    INPUT_DRY_RUN='true' bash "$VALIDATE" 2>&1)"
+assert_contains "$out" 'validated' 'mixed comma and space list is accepted'
+
+out="$(INPUT_DESTINATION='s3,gcs' INPUT_S3_BUCKET='logs-example-org' \
+    bash "$VALIDATE" 2>&1 || true)"
+assert_contains "$out" 'destination must list' 'unknown list member rejected'
+
+# Dry run renders index pages but never overwrites a report's own.
+echo 'x' > "$ws/archives/javascript:alert(1).log"
+out="$(run_publish "$ws" 'INPUT_DESTINATION=r2' 'INPUT_R2_BUCKET=odl-logs' \
+    "INPUT_R2_ACCOUNT_ID=$r2_acct" 'INPUT_ARCHIVE_PATTERNS=allure-report/**')"
+assert_contains "$out" 'r2://odl-logs/logs/gha/yangtools' 'r2 target is logged'
+pages="$(printf '%s' "$out" | sed -n '/^--- r2 index pages ---$/,$p')"
+assert_contains "$pages" $'\nindex.html' 'root index page is generated'
+assert_contains "$pages" 'allure-report/data/index.html' \
+    'nested index page is generated'
+assert_not_contains "$pages" 'allure-report/index.html' \
+    'existing report index.html is preserved'
+idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
+root_page="$(index_page "$idx" 'index.html')"
+assert_contains "$root_page" '<a href="./karaf.log">karaf.log</a>' \
+    'root index links a top level file'
+assert_contains "$root_page" '<a href="./allure-report/">allure-report/</a>' \
+    'root index links a subdirectory'
+assert_not_contains "$root_page" 'href=""' 'root index has no empty links'
+assert_contains "$root_page" 'href="./javascript:alert(1).log"' \
+    'scheme-like file name stays a relative link'
+assert_not_contains "$root_page" 'href="javascript:' \
+    'file name cannot inject a javascript: URL'
+assert_not_contains "$root_page" 'href="../"' 'root index has no parent link'
+data_page="$(index_page "$idx" 'allure-report/data/index.html')"
+assert_contains "$data_page" '<a href="./suites.json">suites.json</a>' \
+    'nested index links its files'
+assert_contains "$data_page" 'href="../"' 'nested index links its parent'
+staged="$(printf '%s' "$out" | sed -n 's/^staging-dir: //p' | head -1)"
+case "$idx" in */log-publish.*.index) rm -rf "$idx" ;; esac
+[ -n "$staged" ] && rm -rf "$staged"
+
+# A path with a tab or newline must never reach the line based
+# manifest. This one would otherwise yield a '../' directory row and
+# write an index page outside the generated tree.
+evil_ws="$(make_workspace)"
+evil_dir="$evil_ws/archives/report"$'\n'"row"$'\t'".."
+mkdir -p "$evil_dir"
+echo 'x' > "$evil_dir/result.log"
+echo 'x' > "$evil_ws/archives/suite\\result.log"
+mkdir -p "$evil_ws/archives/index.html"
+echo 'x' > "$evil_ws/archives/index.html/result.log"
+mkdir -p "$evil_ws/archives/report\\new"
+echo 'x' > "$evil_ws/archives/report\\new/result.log"
+priv_tmp="$(mktemp -d -t lpa-tmp.XXXXXXXX)"
+out="$(run_publish "$evil_ws" 'INPUT_DESTINATION=r2' \
+    'INPUT_R2_BUCKET=odl-logs' "INPUT_R2_ACCOUNT_ID=$r2_acct" \
+    "TMPDIR=$priv_tmp")"
+assert_contains "$out" 'Skipping file with control characters' \
+    'control characters in a path are rejected'
+assert_not_contains "$out" 'result.log	result.log' \
+    'control character path stays out of the manifest'
+idx="$(printf '%s' "$out" | sed -n 's/^index-dir: //p' | head -1)"
+assert_not_contains "$(cut -f2 "${idx}/pages.tsv" 2> /dev/null)" '..' \
+    'no index page key escapes the published tree'
+# A directory named index.html must neither abort generation nor lose
+# its own listing.
+assert_contains "$(index_page "$idx" 'index.html')" \
+    'href="./index.html/"' 'root lists a directory named index.html'
+assert_contains "$(index_page "$idx" 'index.html/index.html')" \
+    'href="./result.log"' 'directory named index.html gets its own listing'
+assert_contains "$(index_page "$idx" 'index.html')" \
+    'href="./suite%5Cresult.log"' 'backslash is percent-encoded in links'
+assert_contains "$(index_page "$idx" 'report\new/index.html')" \
+    'href="./result.log"' 'directory with a backslash still lists its files'
+rm -rf "$priv_tmp" "$evil_ws"
+
+# A stub aws records every call, with the credentials and endpoint it ran
+# under, so routing can be verified without any network access.
+stub_dir="$(mktemp -d -t lpa-aws.XXXXXXXX)"
+calls="${stub_dir}/calls.log"
+cat > "${stub_dir}/aws" << 'STUB'
+#!/usr/bin/env bash
+printf '%s|%s|%s|%s\n' "${AWS_ACCESS_KEY_ID:-}" "${AWS_SESSION_TOKEN:-}" \
+    "${AWS_REGION:-}" "$*" >> "$LPA_CALLS"
+# Like the real CLI, fail when the local source of a cp has vanished.
+prev=''
+for arg in "$@"; do
+    if [ "$prev" = 'cp' ] && [ ! -f "$arg" ]; then
+        echo "missing source: $arg" >> "$LPA_CALLS"
+        exit 1
+    fi
+    prev="$arg"
+done
+STUB
+chmod +x "${stub_dir}/aws"
+
+# A collected _tmpfile shares its name with the S3 index marker; the
+# marker refresh, which runs before the R2 upload, must not touch it.
+echo 'user data' > "$ws/archives/_tmpfile"
+tmp_out="$(mktemp -t lpa-gho.XXXXXXXX)"
+tmp_sum="$(mktemp -t lpa-sum.XXXXXXXX)"
+run_publish "$ws" 'INPUT_DRY_RUN=false' 'INPUT_DESTINATION=r2,s3' \
+    "PATH=${stub_dir}:${PATH}" "LPA_CALLS=${calls}" \
+    'AWS_ACCESS_KEY_ID=AKIAOIDCSESSION' 'AWS_SESSION_TOKEN=oidc-session' \
+    'INPUT_R2_BUCKET=odl-logs' "INPUT_R2_ACCOUNT_ID=$r2_acct" \
+    'INPUT_R2_ACCESS_KEY_ID=r2-key-id' 'INPUT_R2_SECRET_ACCESS_KEY=r2-secret' \
+    'INPUT_R2_BASE_URL=https://logs-r2.example.org' \
+    "GITHUB_OUTPUT=$tmp_out" "GITHUB_STEP_SUMMARY=$tmp_sum" > /dev/null 2>&1
+log="$(cat "$calls" 2> /dev/null)"
+outputs="$(cat "$tmp_out" 2> /dev/null)"
+summary="$(cat "$tmp_sum" 2> /dev/null)"
+
+r2_calls="$(grep -F 'r2.cloudflarestorage.com' <<< "$log")"
+s3_calls="$(grep -vF 'r2.cloudflarestorage.com' <<< "$log")"
+assert_contains "$r2_calls" \
+    "--endpoint-url https://${r2_acct}.r2.cloudflarestorage.com s3 cp" \
+    'r2 uploads use the account endpoint'
+assert_contains "$r2_calls" 's3://odl-logs/logs/gha/yangtools/' \
+    'r2 uploads target the r2 bucket and shared layout'
+assert_contains "$r2_calls" 'r2-key-id||auto|' \
+    'r2 uploads use the r2 token, no session token, region auto'
+assert_not_contains "$r2_calls" 'AKIAOIDCSESSION' \
+    'r2 uploads never see the aws session'
+assert_contains "$r2_calls" '/index.html --content-type text/html' \
+    'r2 receives generated index pages'
+assert_contains "$s3_calls" 'AKIAOIDCSESSION|oidc-session|us-east-1|s3 cp' \
+    's3 uploads keep the oidc session'
+assert_contains "$s3_calls" 's3://logs-example-org/logs/gha/yangtools/' \
+    's3 uploads target the s3 bucket'
+assert_not_contains "$s3_calls" 'r2-key-id' 's3 uploads never see the r2 token'
+assert_contains "$s3_calls" '_tmpfile' 's3 still receives index markers'
+assert_not_contains "$s3_calls" '/index.html --content-type' \
+    's3 does not receive generated index pages'
+assert_eq "$(output_field "$outputs" 'log_url')" \
+    'https://logs-r2.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' \
+    'first listed destination (r2) is the primary log_url'
+assert_eq "$(output_field "$outputs" 's3_log_url')" \
+    'https://logs.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 's3_log_url output set'
+assert_eq "$(output_field "$outputs" 'r2_log_url')" \
+    'https://logs-r2.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' 'r2_log_url output set'
+assert_eq "$(output_field "$outputs" 'failed_count')" '0' \
+    'dual publish reports no failures'
+assert_not_contains "$log" 'missing source' \
+    'every upload source still exists when its turn comes'
+assert_contains "$r2_calls" 'maven-merge/_tmpfile --content-type' \
+    'a collected _tmpfile reaches r2 after the s3 marker refresh'
+assert_contains "$summary" '- R2: [Browse logs]' 'summary links the r2 copy'
+assert_contains "$summary" '- S3: [Browse logs]' 'summary links the s3 copy'
+
+# Order decides the primary.
+: > "$calls"
+outputs="$(run_publish_outputs "$ws" 'INPUT_DRY_RUN=false' \
+    'INPUT_DESTINATION=s3,r2' "PATH=${stub_dir}:${PATH}" \
+    "LPA_CALLS=${calls}" 'INPUT_R2_BUCKET=odl-logs' \
+    "INPUT_R2_ACCOUNT_ID=$r2_acct" 'INPUT_R2_ACCESS_KEY_ID=k' \
+    'INPUT_R2_SECRET_ACCESS_KEY=s' \
+    'INPUT_R2_BASE_URL=https://logs-r2.example.org')"
+assert_eq "$(output_field "$outputs" 'log_url')" \
+    'https://logs.example.org/logs/gha/yangtools/gerrit-maven-merge/4242/2/maven-merge/' \
+    'first listed destination (s3) is the primary log_url'
+
+# Index generation can be turned off.
+: > "$calls"
+run_publish "$ws" 'INPUT_DRY_RUN=false' 'INPUT_DESTINATION=r2' \
+    "PATH=${stub_dir}:${PATH}" "LPA_CALLS=${calls}" \
+    'INPUT_R2_BUCKET=odl-logs' "INPUT_R2_ACCOUNT_ID=$r2_acct" \
+    'INPUT_R2_ACCESS_KEY_ID=k' 'INPUT_R2_SECRET_ACCESS_KEY=s' \
+    'INPUT_R2_INDEX=false' > /dev/null 2>&1
+log="$(cat "$calls" 2> /dev/null)"
+assert_not_contains "$log" '/index.html --content-type' \
+    'r2_index=false skips generated pages'
+assert_not_contains "$log" 's3://odl-logs/logs/_tmpfile' \
+    'r2 never writes s3 index markers'
+
+rm -rf "$stub_dir" "$tmp_out" "$tmp_sum" "$ws"
 
 # ---------------------------------------------------------------------------
 echo

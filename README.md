@@ -5,8 +5,8 @@
 
 # 🪵 Log Publishing Action
 
-Publishes build logs and test reports to an S3 log server, to GitHub
-workflow artifacts, or to both.
+Publishes build logs and test reports to an S3 log server, a Cloudflare
+R2 bucket, GitHub workflow artifacts, or any combination of those.
 
 ## log-publish-action
 
@@ -41,7 +41,9 @@ output — become durable, linkable URLs.
   credentials and no network access
 - **Destination Agnostic**: Collection, console capture, metadata and
   compression are independent of where the result lands, so the same
-  pipeline feeds S3, workflow artifacts, or both
+  pipeline feeds S3, R2, workflow artifacts, or any mix of them
+- **Dual Publishing**: `s3,r2` writes the same tree to both stores with
+  separate credentials, for a gradual migration between them
 
 ## Usage Examples
 
@@ -72,6 +74,49 @@ This needs no bucket, no credentials and no AWS CLI:
     destination: "artifact"
     artifact_name: "build-logs"
     artifact_retention_days: "30"
+```
+
+### Cloudflare R2
+
+Cloudflare offers no OIDC federation, so pass an R2 API token from
+secrets. The token never replaces an AWS session already present in the
+job:
+
+```yaml
+- name: "Publish build logs"
+  if: always()
+  uses: lfreleng-actions/log-publish-action@main
+  with:
+    destination: "r2"
+    r2_bucket: ${{ vars.R2_LOG_BUCKET }}
+    r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
+    r2_access_key_id: ${{ secrets.R2_LOG_ACCESS_KEY_ID }}
+    r2_secret_access_key: ${{ secrets.R2_LOG_SECRET_ACCESS_KEY }}
+    r2_base_url: ${{ vars.R2_LOG_BASE_URL }}
+```
+
+### Dual publishing during a migration
+
+List both stores. The first one listed that has a public URL becomes
+`log_url`; `s3_log_url` and `r2_log_url` expose each copy:
+
+```yaml
+- uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+  with:
+    role-to-assume: ${{ vars.AWS_LOG_ROLE_ARN }}
+    aws-region: ${{ vars.S3_LOG_REGION }}
+- name: "Publish build logs"
+  if: always()
+  uses: lfreleng-actions/log-publish-action@main
+  with:
+    destination: "s3,r2"
+    s3_bucket: ${{ vars.S3_LOG_BUCKET }}
+    base_url: ${{ vars.LOG_BASE_URL }}
+    r2_bucket: ${{ vars.R2_LOG_BUCKET }}
+    r2_account_id: ${{ vars.R2_ACCOUNT_ID }}
+    r2_access_key_id: ${{ secrets.R2_LOG_ACCESS_KEY_ID }}
+    r2_secret_access_key: ${{ secrets.R2_LOG_SECRET_ACCESS_KEY }}
+    r2_base_url: ${{ vars.R2_LOG_BASE_URL }}
 ```
 
 ### Maven build with test artifacts
@@ -158,20 +203,24 @@ publish-logs:
 
 <!-- markdownlint-disable MD013 -->
 
-|                     | `s3`                             | `artifact`                                             |
-| ------------------- | -------------------------------- | ------------------------------------------------------ |
-| Anonymous access    | Yes                              | **No** — requires a GitHub login, even on public repos |
-| HTML reports        | Rendered in the browser          | Zip download; unpack Allure and Robot first            |
-| Retention           | Bucket lifecycle, today 180 days | 1–90 days on public repos                              |
-| Stable per-file URL | Yes                              | No — artifact IDs change every run                     |
-| Cost                | Storage plus egress              | Free for public repositories                           |
+|                     | `s3`                             | `r2`                               | `artifact`                                             |
+| ------------------- | -------------------------------- | ---------------------------------- | ------------------------------------------------------ |
+| Anonymous access    | Yes                              | Yes, through a custom domain       | **No** — requires a GitHub login, even on public repos |
+| HTML reports        | Rendered in the browser          | Rendered in the browser            | Zip download; unpack Allure and Robot first            |
+| Directory listings  | Server-side Lambda               | `index.html` written by the action | Not applicable                                         |
+| Credentials         | OIDC, short-lived                | R2 API token in secrets            | None                                                   |
+| Retention           | Bucket lifecycle, today 180 days | Bucket lifecycle rule              | 1–90 days on public repos                              |
+| Stable per-file URL | Yes                              | Yes                                | No — artifact IDs change every run                     |
+| Cost                | Storage plus egress              | Storage, no egress fees            | Free for public repositories                           |
 
 <!-- markdownlint-enable MD013 -->
 
 Use `s3` when a link has to work for someone who is not signed in: a bug
 report, a mailing list thread, or a dashboard pointing at trend history.
 Use `artifact` for bulk content that maintainers alone open, where a login
-costs nothing. `both` writes the same set to each.
+costs nothing. `r2` gives the same anonymous URLs as `s3` without egress
+charges. Combine any of them, for example `s3,r2` or `r2,artifact`, to
+write the same set to each. The legacy value `both` means `s3,artifact`.
 
 ### Driving the choice from an organisation variable
 
@@ -196,7 +245,7 @@ compression stages all keep working; the hand-off alone moves.
 
 | Input                        | Required | Default             | Description                                                        |
 | ---------------------------- | -------- | ------------------- | ------------------------------------------------------------------ |
-| `destination`                | No       | `s3`                | Where to publish: `s3`, `artifact`, or `both`                      |
+| `destination`                | No       | `s3`                | List of `s3`, `r2`, `artifact`; `both` means `s3,artifact`         |
 | `s3_bucket`                  | Cond.    |                     | Target S3 bucket; required unless `destination` is `artifact`      |
 | `s3_path`                    | No       |                     | Full path in the bucket; overrides the derived path                |
 | `path_prefix`                | No       | `logs`              | Top-level prefix within the bucket                                 |
@@ -212,11 +261,18 @@ compression stages all keep working; the hand-off alone moves.
 | `index_markers`              | No       | `true`              | Trigger server-side regeneration of `index.html`                   |
 | `base_url`                   | No       |                     | Public base URL of the log server, used to build `log_url`         |
 | `aws_region`                 | No       | `us-east-1`         | AWS region of the bucket                                           |
+| `r2_bucket`                  | Cond.    |                     | Target R2 bucket; required when `destination` includes `r2`        |
+| `r2_account_id`              | Cond.    |                     | Cloudflare account id; derives the R2 S3 API endpoint              |
+| `r2_endpoint_url`            | No       |                     | Explicit R2 endpoint; overrides `r2_account_id`                    |
+| `r2_access_key_id`           | Cond.    |                     | R2 API token access key id; pass from a secret                     |
+| `r2_secret_access_key`       | Cond.    |                     | R2 API token secret access key; pass from a secret                 |
+| `r2_base_url`                | No       |                     | Public R2 custom domain URL, used to build `r2_log_url`            |
+| `r2_index`                   | No       | `true`              | Write `index.html` listings on R2, keeping any existing one        |
 | `artifact_name`              | No       | `build-logs`        | Name of the uploaded artifact; set per matrix leg                  |
 | `artifact_retention_days`    | No       |                     | Artifact retention; empty uses the repository default              |
 | `artifact_if_no_files_found` | No       | `warn`              | Behaviour when the run collects nothing: `warn`, `error`, `ignore` |
 | `github_token`               | No       |                     | Token for `capture_console`                                        |
-| `dry_run`                    | No       | `false`             | Collect and build the manifest, but make no S3 calls               |
+| `dry_run`                    | No       | `false`             | Collect and build the manifest, but make no S3 or R2 calls         |
 | `permit_fail`                | No       | `true`              | Do not fail the step when publishing fails                         |
 
 ## Outputs
@@ -224,9 +280,11 @@ compression stages all keep working; the hand-off alone moves.
 | Output          | Description                                          |
 | --------------- | ---------------------------------------------------- |
 | `s3_path`       | Resolved path within the bucket                      |
-| `log_url`       | Public URL of the published directory                |
+| `log_url`       | Public URL on the first listed remote destination    |
+| `s3_log_url`    | Public URL of the S3 copy, empty when not published  |
+| `r2_log_url`    | Public URL of the R2 copy, empty when not published  |
 | `file_count`    | Number of files collected                            |
-| `upload_count`  | Number of files uploaded to S3                       |
+| `upload_count`  | Files uploaded, summed across S3 and R2              |
 | `failed_count`  | Number of files that failed to upload                |
 | `manifest_path` | Path to the generated upload manifest                |
 | `staging_dir`   | Staged tree, when the artifact destination is in use |
@@ -359,6 +417,30 @@ Place `configure-aws-credentials` next to this action rather than at the
 top of a long job. The session is short-lived, so a role assumed at the
 start of a multi-hour build can expire before the upload runs.
 
+### R2 credentials and bucket setup
+
+These apply when `destination` includes `r2`. R2 speaks the S3 API, so
+the action reuses the AWS CLI against
+`https://<account_id>.r2.cloudflarestorage.com` with region `auto`. The
+CLI skips optional checksums unless R2 requires them.
+
+On the Cloudflare side:
+
+1. Create the bucket and add an object lifecycle rule that deletes
+   objects after the retention period, for example 180 days.
+2. Connect a custom domain for public access, and keep the `r2.dev`
+   development URL disabled. The custom domain's zone must live in the
+   same Cloudflare account.
+3. R2 does not map `dir/` to `dir/index.html`. Add a URL rewrite rule on
+   the custom domain that appends `index.html` to paths ending in `/`.
+   The action writes those pages when `r2_index` is `true`.
+4. Create an R2 API token with **Object Read & Write** on that bucket
+   alone, and store it as `R2_LOG_ACCESS_KEY_ID` and
+   `R2_LOG_SECRET_ACCESS_KEY` organisation secrets.
+
+A reusable workflow sees the secrets its caller passes and no others, so
+callers need `secrets: inherit` or explicit secret mappings.
+
 ### Tooling
 
 `aws` CLI and `gzip` must be present on the runner. Both are present on
@@ -375,7 +457,9 @@ bash tests/run-tests.sh
 
 It covers input validation, path derivation, content collection,
 content-type assignment, compression (including gzip round-tripping of
-the actual staged bytes), outputs and robustness.
+the actual staged bytes), outputs and robustness. R2 and dual publishing
+run against a stub `aws` that records each call with the credentials and
+endpoint in effect, proving the two stores never share credentials.
 
 ## Troubleshooting
 
@@ -386,6 +470,8 @@ the actual staged bytes), outputs and robustness.
 | `index.html` not refreshed | Markers off, or path under 3 segments         |
 | Console log empty          | Captured from the job that reads it           |
 | `403` on upload            | IAM policy misses the target prefix           |
+| R2 directory URL 404s      | Missing rewrite rule for `/` → `index.html`   |
+| R2 `401`/`403` on upload   | Token not scoped to the bucket, or expired    |
 | Report links 404           | `compress_suffix` on a multi-file report      |
 
 ## Implementation Notes
