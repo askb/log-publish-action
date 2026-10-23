@@ -99,6 +99,12 @@ def test_rejects(env: dict[str, str], message: str) -> None:
         # The depth rule only places S3 markers.
         {"destination": "artifact", "s3_path": "shallow", "dry_run": "false"},
         {
+            "s3_bucket": "logs-example-org",
+            "s3_path": "ci/run1",
+            "index_markers": "false",
+            "dry_run": "true",
+        },
+        {
             "destination": "r2",
             "r2_bucket": "odl-logs",
             "r2_account_id": R2_ACCOUNT,

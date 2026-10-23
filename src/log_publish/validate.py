@@ -90,13 +90,15 @@ def validate(cfg: Config, pip_available: bool | None = None) -> None:
 
     if cfg.s3_path:
         # Index markers go to the first three path segments; a shallower
-        # path would place them outside the intended hierarchy.
+        # path would place them outside the intended hierarchy. Without
+        # markers the depth does not matter.
         segments = len(trim_slashes(cfg.s3_path).split("/"))
-        if dest.s3 and segments < 3:
+        if dest.s3 and cfg.index_markers == "true" and segments < 3:
             raise ValidationError(
                 "s3_path must be at least three segments deep ❌",
                 f"Received: '{cfg.s3_path}' ({segments} segment(s))",
-                "The first three segments receive the index marker.",
+                "The first three segments receive the index marker;"
+                + " set index_markers to false to use a shallower path.",
             )
     elif not cfg.path_prefix or not cfg.namespace:
         raise ValidationError(

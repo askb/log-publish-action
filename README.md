@@ -322,7 +322,9 @@ also writes:
 The log server regenerates `index.html` from an S3 event. The action
 writes, then deletes, a marker object in each of the first three path
 segments to trigger that regeneration. A shallower path leaves parts of
-the hierarchy unbrowsable, so the action rejects one.
+the hierarchy unbrowsable, so the action rejects one. Setting
+`index_markers` to `false` lifts the rule, and the action then accepts a
+path of any depth.
 
 ## Deviations From The Jenkins Behaviour
 

@@ -44,9 +44,10 @@ inputs:
   # Path construction
   s3_path:
     description: >-
-      Full path within the bucket. Overrides the derived path. Must be at
-      least three segments deep, since the first three receive the index
-      marker that refreshes directory listings.
+      Full path within the bucket. Overrides the derived path. With
+      index_markers on, it must be at least three segments deep, since the
+      first three receive the index marker that refreshes directory
+      listings.
     required: false
     default: ''
   path_prefix:
