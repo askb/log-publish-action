@@ -183,6 +183,24 @@ def test_r2_explicit_endpoint(run: Runner, workspace: Path, wire: list[Sent]) ->
     assert wire and all(s.host.endswith("eu.r2.example") for s in wire)
 
 
+def test_r2_ignores_an_unknown_aws_profile(
+    run: Runner, workspace: Path, wire: list[Sent], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AWS_PROFILE belongs to the S3 side; R2 carries explicit keys."""
+    monkeypatch.setenv("AWS_PROFILE", "not-on-this-runner")
+    result = run(
+        workspace,
+        factory(wire),
+        INPUT_DRY_RUN="false",
+        INPUT_DESTINATION="r2",
+        **R2_ENV,
+    )
+    assert result.status == 0, result.stdout
+    assert result.outputs["failed_count"] == "0"
+    assert wire and all(s.store == "r2" for s in wire)
+    assert all("Credential=r2-key-id/" in s.headers["authorization"] for s in wire)
+
+
 def test_install_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The runtime install refuses anything not hash pinned in the lock."""
     calls: list[list[str]] = []

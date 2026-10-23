@@ -56,7 +56,11 @@ class _Session(Protocol):
 
 
 class _SessionModule(Protocol):
-    Session: Callable[[], _Session]
+    Session: Callable[..., _Session]
+
+
+class _BotocoreSessionModule(Protocol):
+    Session: Callable[..., object]
 
 
 class _ConfigModule(Protocol):
@@ -115,8 +119,8 @@ def boto3_client(target: str, cfg: Config) -> ObjectStore:
     """A real client for "s3" or "r2"."""
     sessions = cast(_SessionModule, _module("boto3.session"))
     botocore_config = cast(_ConfigModule, _module("botocore.config"))
-    session = sessions.Session()
     if target == "s3":
+        session = sessions.Session()
         # The default credential chain: normally the short lived OIDC
         # session from configure-aws-credentials.
         client = session.client(
@@ -128,7 +132,13 @@ def boto3_client(target: str, cfg: Config) -> ObjectStore:
         # Explicit keys keep the R2 token and the AWS session apart, which
         # is what makes dual publishing possible. R2 ignores the region
         # but SigV4 needs one, and it rejects the optional checksums newer
-        # botocore sends by default.
+        # botocore sends by default. AWS_PROFILE belongs to the S3 side;
+        # a profile the runner lacks would otherwise fail R2 as well.
+        botocore_sessions = cast(_BotocoreSessionModule, _module("botocore.session"))
+        isolated = botocore_sessions.Session(
+            session_vars={"profile": (None, None, None, None)}
+        )
+        session = sessions.Session(botocore_session=isolated)
         client = session.client(
             "s3",
             endpoint_url=cfg.r2_endpoint,
