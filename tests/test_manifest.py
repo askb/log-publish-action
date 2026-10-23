@@ -104,6 +104,22 @@ def test_gzip_is_reproducible(run: Runner, workspace: Path) -> None:
     assert first == second
 
 
+def test_gzip_temp_cannot_clobber_staged_files(run: Runner, workspace: Path) -> None:
+    archives = workspace / "archives"
+    _ = (archives / "build.log").write_text("build output")
+    _ = (archives / "build.log.lpa-gz").write_text("unrelated sidecar")
+    result = run(workspace)
+    staged = result.staging
+    assert gzip.decompress((staged / "build.log").read_bytes()) == b"build output"
+    assert (staged / "build.log.lpa-gz").read_text() == "unrelated sidecar"
+    assert not [p.name for p in staged.iterdir() if p.name.startswith(".lpa-gz-")]
+
+
+def test_gzip_header_has_no_name(run: Runner, workspace: Path) -> None:
+    header = (run(workspace).staging / "karaf.log").read_bytes()[:10]
+    assert header[3] & 0x08 == 0  # FNAME flag clear
+
+
 def test_manifest_is_persisted(run: Runner, workspace: Path, tmp_path: Path) -> None:
     result = run(workspace)
     path = Path(result.outputs["manifest_path"])

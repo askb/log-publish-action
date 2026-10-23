@@ -18,6 +18,7 @@ from __future__ import annotations
 import gzip
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,11 +103,18 @@ def _has_control(text: str) -> bool:
 
 
 def _gzip_in_place(path: Path) -> bool:
-    tmp = path.with_name(path.name + ".lpa-gz")
+    # Exclusively created, so it can never be a staged file.
     try:
-        with path.open("rb") as src, tmp.open("wb") as raw:
-            # mtime=0 keeps the output reproducible.
-            with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=9, mtime=0) as gz:
+        fd, name = tempfile.mkstemp(prefix=".lpa-gz-", dir=path.parent)
+    except OSError:
+        return False
+    tmp = Path(name)
+    try:
+        with path.open("rb") as src, os.fdopen(fd, "wb") as raw:
+            # No name and mtime=0 keep the output reproducible.
+            with gzip.GzipFile(
+                filename="", fileobj=raw, mode="wb", compresslevel=9, mtime=0
+            ) as gz:
                 shutil.copyfileobj(src, gz, 1024 * 1024)
         os.replace(tmp, path)
     except OSError:
