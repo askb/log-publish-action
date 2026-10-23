@@ -261,9 +261,12 @@ runs:
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
       # The runner's own python3; the action needs no setup-python step.
-      # -E -s keep PYTHON* variables and user site packages out.
+      # -I and -E -s keep PYTHON* variables and user site packages out,
+      # so no sitecustomize from the caller runs with these secrets.
+      # main.py keeps -E -s: -I would also drop its own directory, the
+      # action's src/, from the import path on Python 3.10.
       run: |
-        if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))'
+        if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))'
         then
           echo "::error::log-publish-action needs python3 >= 3.10 on PATH"
           exit 1
