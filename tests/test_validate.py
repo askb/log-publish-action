@@ -130,6 +130,25 @@ def test_accepts(env: dict[str, str]) -> None:
     assert check(**env) == ""
 
 
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "capture_console",
+        "compress",
+        "compress_suffix",
+        "dry_run",
+        "include_sysinfo",
+        "index_markers",
+        "permit_fail",
+        "r2_index",
+    ],
+)
+@pytest.mark.parametrize("value", ["yes", "False", "nope", "1"])
+def test_rejects_non_boolean_flags(flag: str, value: str) -> None:
+    env = {"destination": "artifact", flag: value}
+    assert check(**env) == f"{flag} must be 'true' or 'false', got '{value}' ❌"
+
+
 def test_real_upload_needs_pip() -> None:
     assert "pip is not available" in check(False, s3_bucket="logs-example-org")
     assert check(False, s3_bucket="logs-example-org", dry_run="true") == ""

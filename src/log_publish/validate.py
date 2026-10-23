@@ -81,7 +81,12 @@ def validate(cfg: Config, pip_available: bool | None = None) -> None:
 
     flags = {
         "capture_console": cfg.capture_console,
+        "compress": cfg.compress,
+        "compress_suffix": cfg.compress_suffix,
         "dry_run": cfg.dry_run,
+        "include_sysinfo": cfg.include_sysinfo,
+        "index_markers": cfg.index_markers,
+        "permit_fail": cfg.permit_fail,
         "r2_index": cfg.r2_index,
     }
     for name, value in flags.items():
