@@ -9,7 +9,6 @@ is really uploaded; a dry run or an artifact only run never needs it.
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import os
 import subprocess
@@ -64,17 +63,22 @@ class _ConfigModule(Protocol):
     Config: Callable[..., object]
 
 
+# Installs completed by this process. A directory left by anything else,
+# such as an earlier build step, is never trusted.
+_installed: dict[Path, Path] = {}
+
+
 def install_boto3(requirements: Path = REQUIREMENTS) -> None:
     """Install the pinned boto3 into the runner temp area and import it.
 
-    Hash checking mode refuses anything that differs from the lock, and
-    the install directory is keyed by the requirements digest so a
-    different action version never reuses a stale copy.
+    Hash checking mode refuses anything that differs from the lock. The
+    target is a fresh, exclusively created directory; the second
+    destination reuses the install from this process.
     """
-    digest = hashlib.sha256(requirements.read_bytes()).hexdigest()[:16]
-    base = Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir())
-    target = base / f"log-publish-deps-{digest}"
-    if not (target / "boto3").is_dir():
+    target = _installed.get(requirements)
+    if target is None:
+        base = Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir())
+        target = Path(tempfile.mkdtemp(prefix="log-publish-deps-", dir=base))
         info("Installing boto3 (hash pinned) ...")
         cmd = [
             sys.executable,
@@ -98,6 +102,7 @@ def install_boto3(requirements: Path = REQUIREMENTS) -> None:
         result = subprocess.run(cmd, check=False, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"pip install failed:\n{result.stderr.strip()}")
+        _installed[requirements] = target
     if str(target) not in sys.path:
         sys.path.insert(0, str(target))
 

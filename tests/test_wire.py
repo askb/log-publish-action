@@ -198,7 +198,13 @@ def test_install_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(upload, "_installed", {})
+    # A directory planted by an earlier step is never trusted.
+    planted = tmp_path / "log-publish-deps-planted" / "boto3"
+    planted.mkdir(parents=True)
     upload.install_boto3()
+    upload.install_boto3()
+    assert len(calls) == 1, "the second destination reuses this install"
     cmd = calls[0]
     assert cmd[1:4] == ["-I", "-m", "pip"]
     for flag in ("--require-hashes", "--no-deps", "--only-binary=:all:"):
@@ -206,7 +212,9 @@ def test_install_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     target = Path(cmd[cmd.index("--target") + 1])
     assert target.parent == tmp_path
     assert target.name.startswith("log-publish-deps-")
+    assert target != planted.parent
     assert sys.path[0] == str(target)
+    assert str(planted.parent) not in sys.path
 
 
 def test_requirements_are_pinned_and_hashed() -> None:
