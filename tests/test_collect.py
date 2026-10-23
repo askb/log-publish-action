@@ -78,6 +78,14 @@ def test_patterns(run: Runner, workspace: Path) -> None:
     assert "target/surefire-reports/TEST-a.xml" in rows
 
 
+def test_posix_class_pattern(run: Runner, workspace: Path) -> None:
+    _ = (workspace / "test1.log").write_text("one")
+    _ = (workspace / "testx.log").write_text("x")
+    keys = run(workspace, INPUT_ARCHIVE_PATTERNS="test[[:digit:]].log").manifest()
+    assert "test1.log" in keys
+    assert "testx.log" not in keys
+
+
 @pytest.mark.parametrize("pattern", ["/etc/passwd", "../../../etc/passwd"])
 def test_unsafe_pattern(run: Runner, workspace: Path, pattern: str) -> None:
     result = run(workspace, INPUT_ARCHIVE_PATTERNS=pattern)
@@ -164,6 +172,26 @@ class TestGlob:
         assert self.rels(tree, "d/[!a]?log") == {"d/b.log"}
         assert self.rels(tree, "d/[b].log") == {"d/b.log"}
         assert self.rels(tree, "d/missing.log") == set()
+
+    @pytest.mark.parametrize(
+        ("pattern", "expected"),
+        [
+            ("test[[:digit:]].log", {"test1.log"}),
+            ("test[![:digit:]].log", {"testa.log", "testB.log", "test[.log"}),
+            ("test[[:upper:][:digit:]].log", {"test1.log", "testB.log"}),
+            ("test[[:alpha:]].log", {"testa.log", "testB.log"}),
+            ("test[[:bogus:]].log", set[str]()),
+            ("test[1-2].log", {"test1.log"}),
+            ("test[.log", {"test[.log"}),
+            ("test\\[.log", {"test[.log"}),
+        ],
+    )
+    def test_bash_bracket_expressions(
+        self, tmp_path: Path, pattern: str, expected: set[str]
+    ) -> None:
+        for name in ("test1.log", "testa.log", "testB.log", "test[.log"):
+            _ = (tmp_path / name).write_text(name)
+        assert self.rels(tmp_path, pattern) == expected
 
     def test_globstar_does_not_follow_dir_links(self, tree: Path) -> None:
         os.symlink(tree / "d", tree / "loop")

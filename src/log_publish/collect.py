@@ -8,10 +8,12 @@ the destination; only the final upload stage differs.
 
 from __future__ import annotations
 
-import fnmatch
+import functools
 import json
 import os
+import re
 import shutil
+import string
 import subprocess
 import urllib.error
 import urllib.parse
@@ -27,6 +29,89 @@ from .log import info, warn
 from .paths import slugify
 
 _MAGIC = frozenset("*?[")
+
+
+# ASCII, as in the C locale the runners use.
+_POSIX_CLASSES = {
+    "alnum": "a-zA-Z0-9",
+    "alpha": "a-zA-Z",
+    "blank": " \\t",
+    "cntrl": "\\x00-\\x1f\\x7f",
+    "digit": "0-9",
+    "graph": "!-~",
+    "lower": "a-z",
+    "print": " -~",
+    "punct": re.escape(string.punctuation),
+    "space": " \\t\\n\\r\\f\\v",
+    "upper": "A-Z",
+    "word": "a-zA-Z0-9_",
+    "xdigit": "0-9A-Fa-f",
+}
+
+
+def _bracket(pattern: str, start: int) -> tuple[str, int] | None:
+    """Translate the bracket expression at pattern[start] == "[".
+
+    Returns the regex and the index after the closing "]", or None when
+    the bracket is unterminated and so a literal "[", as in bash.
+    """
+    i = start + 1
+    negate = i < len(pattern) and pattern[i] in "!^"
+    if negate:
+        i += 1
+    items: list[str] = []
+    first = True
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "]" and not first:
+            body = "".join(items)
+            if not body:
+                return ("[^\\s\\S]" if not negate else "."), i + 1
+            return f"[{'^' if negate else ''}{body}]", i + 1
+        first = False
+        if pattern.startswith("[:", i):
+            end = pattern.find(":]", i + 2)
+            if end != -1:
+                items.append(_POSIX_CLASSES.get(pattern[i + 2 : end], ""))
+                i = end + 2
+                continue
+        if ch == "\\" and i + 1 < len(pattern):
+            i += 1
+            ch = pattern[i]
+        if pattern[i + 1 : i + 2] == "-" and pattern[i + 2 : i + 3] not in ("", "]"):
+            high = pattern[i + 2]
+            if ch <= high:
+                items.append(f"{re.escape(ch)}-{re.escape(high)}")
+            i += 3
+            continue
+        items.append(re.escape(ch))
+        i += 1
+    return None
+
+
+@functools.lru_cache(maxsize=256)
+def _component_regex(pattern: str) -> re.Pattern[str]:
+    """A single path component of a bash pattern as a regex. * matches a
+    leading dot (dotglob); bracket expressions accept POSIX classes."""
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "*":
+            out.append(".*")
+        elif ch == "?":
+            out.append(".")
+        elif ch == "[" and (bracket := _bracket(pattern, i)) is not None:
+            out.append(bracket[0])
+            i = bracket[1]
+            continue
+        elif ch == "\\" and i + 1 < len(pattern):
+            i += 1
+            out.append(re.escape(pattern[i]))
+        else:
+            out.append(re.escape(ch))
+        i += 1
+    return re.compile("".join(out), re.DOTALL)
 
 
 def _has_magic(component: str) -> bool:
@@ -65,9 +150,9 @@ def _match(path: Path, parts: list[str]) -> Iterator[Path]:
             if entry.is_dir(follow_symlinks=False):
                 yield from _match(Path(entry.path), parts)
     elif _has_magic(head):
-        # fnmatch lets * match a leading dot, which is bash dotglob.
+        regex = _component_regex(head)
         for entry in _scandir(path):
-            if fnmatch.fnmatchcase(entry.name, head):
+            if regex.fullmatch(entry.name):
                 yield from _match(Path(entry.path), rest)
     else:
         candidate = path / head
