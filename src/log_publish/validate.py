@@ -12,7 +12,7 @@ import importlib.util
 import re
 
 from .config import VALID_DESTINATIONS, Config, split_destinations
-from .log import info
+from .log import error, info
 from .paths import trim_slashes
 
 S3_BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
@@ -132,7 +132,7 @@ def run(cfg: Config) -> int:
     try:
         validate(cfg)
     except ValidationError as err:
-        info(f"Error: {err.message}")
+        error(err.message)
         for hint in err.hints:
             info(f"  {hint}")
         return 1

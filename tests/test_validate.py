@@ -159,5 +159,5 @@ def test_run_reports(capsys: pytest.CaptureFixture[str]) -> None:
     cfg = Config.from_env({"INPUT_S3_BUCKET": "logs-example-org", "INPUT_S3_PATH": "a"})
     assert validate.run(cfg) == 1
     out = capsys.readouterr().out
-    assert "Error: s3_path must be at least three segments deep ❌" in out
+    assert "::error::s3_path must be at least three segments deep ❌" in out
     assert "Received: 'a' (1 segment(s))" in out
