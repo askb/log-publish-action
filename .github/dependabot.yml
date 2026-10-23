@@ -17,9 +17,40 @@ updates:
       default-days: 7
     open-pull-requests-limit: 15
 
-  # uv.lock pins boto3 and the dev tools. CI fails until requirements.txt
-  # is regenerated to match: uv export --frozen --no-dev
-  # --no-emit-project -o requirements.txt
+  # requirements.txt is the single source of the runtime dependencies,
+  # installed by the action with pip in hash checking mode. Dependabot
+  # rewrites the --hash lines itself, so its PRs need no manual commit.
+  # The allow list keeps this entry off the dev tools in pyproject.toml,
+  # which belong to the uv entry below.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "Chore(deps)"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    allow:
+      - dependency-name: "boto3"
+      - dependency-name: "botocore"
+      - dependency-name: "s3transfer"
+      - dependency-name: "jmespath"
+      - dependency-name: "python-dateutil"
+      - dependency-name: "six"
+      - dependency-name: "urllib3"
+    # The action installs with --no-deps, so pip never checks that these
+    # agree. Move them together; CI checks the set resolves.
+    groups:
+      aws-sdk:
+        patterns:
+          - "boto3"
+          - "botocore"
+          - "s3transfer"
+
+  # uv.lock pins the development tools only. The runtime packages are
+  # ignored here so the uv ecosystem, which also reads requirements
+  # files, never opens a second PR for them.
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
@@ -29,3 +60,11 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "boto3"
+      - dependency-name: "botocore"
+      - dependency-name: "s3transfer"
+      - dependency-name: "jmespath"
+      - dependency-name: "python-dateutil"
+      - dependency-name: "six"
+      - dependency-name: "urllib3"
