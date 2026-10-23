@@ -164,16 +164,46 @@ def _match(path: Path, parts: list[str]) -> Iterator[Path]:
             if regex.fullmatch(entry.name):
                 yield from _match(Path(entry.path), rest)
     else:
-        candidate = path / head
+        candidate = path / _unescape(head)
         if os.path.lexists(candidate):
             yield from _match(candidate, rest)
+
+
+def _unescape(component: str) -> str:
+    return re.sub(r"\\(.)", r"\1", component, flags=re.DOTALL)
+
+
+def _split(pattern: str) -> list[str]:
+    """Pattern components, split like bash: an escaped slash still
+    separates components; other escapes are kept for matching."""
+    parts: list[str] = []
+    current: list[str] = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            if pattern[i + 1] == "/":
+                parts.append("".join(current))
+                current = []
+            else:
+                current.append(pattern[i : i + 2])
+            i += 2
+        elif ch == "/":
+            parts.append("".join(current))
+            current = []
+            i += 1
+        else:
+            current.append(ch)
+            i += 1
+    parts.append("".join(current))
+    return [part for part in parts if part]
 
 
 def glob_files(root: Path, pattern: str) -> list[Path]:
     """Files under root matching a bash globstar/dotglob/nullglob pattern."""
     if pattern.endswith("/"):
         return []
-    parts = [part for part in pattern.split("/") if part]
+    parts = _split(pattern)
     seen: dict[Path, None] = {}
     for match in _match(root, parts):
         if match.is_file():

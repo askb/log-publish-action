@@ -215,6 +215,25 @@ class TestGlob:
     @pytest.mark.parametrize(
         ("pattern", "expected"),
         [
+            ("allure\\-report/**", {"allure-report/index.html"}),
+            ("allure\\-report/index\\.html", {"allure-report/index.html"}),
+            ("a\\\\b/*", {"a\\b/x.log"}),
+            ("allure-report\\/**", {"allure-report/index.html"}),
+            ("a\\\\/x.log", set[str]()),
+        ],
+    )
+    def test_escaped_literal_components(
+        self, tmp_path: Path, pattern: str, expected: set[str]
+    ) -> None:
+        (tmp_path / "allure-report").mkdir()
+        _ = (tmp_path / "allure-report" / "index.html").write_text("r")
+        (tmp_path / "a\\b").mkdir()
+        _ = (tmp_path / "a\\b" / "x.log").write_text("x")
+        assert self.rels(tmp_path, pattern) == expected
+
+    @pytest.mark.parametrize(
+        ("pattern", "expected"),
+        [
             ("test[[:digit:]].log", {"test1.log"}),
             ("test[![:digit:]].log", {"testa.log", "testB.log", "test[.log"}),
             ("test[[:upper:][:digit:]].log", {"test1.log", "testB.log"}),
