@@ -69,13 +69,19 @@ jobs:
         shell: bash
         run: |
           # Check the lock and the runtime requirements
-          # Fail if uv.lock is stale, or if requirements.txt, which the
-          # action installs from, no longer matches it (Dependabot only
-          # updates uv.lock).
+          # uv.lock pins the dev tools and must match pyproject.toml.
           uv lock --check
-          uv export --frozen --no-dev --no-emit-project \
-            -o requirements.txt
-          git diff --exit-code -- requirements.txt
+          # The action installs requirements.txt with --no-deps, so pip
+          # never checks that the pins agree. Install it here with
+          # dependency resolution on, using the runner's python3 as the
+          # action does: every dependency must already be pinned and
+          # hashed, and pip check must find no conflict. This catches a
+          # boto3 bump that needs a newer botocore.
+          python3 -m venv /tmp/requirements-check
+          /tmp/requirements-check/bin/python -m pip install \
+            --quiet --disable-pip-version-check --require-hashes \
+            --only-binary=:all: -r requirements.txt
+          /tmp/requirements-check/bin/python -m pip check
 
       - name: "Run test suite"
         shell: bash
@@ -83,7 +89,11 @@ jobs:
           PYTHON_VERSION: "${{ matrix.python }}"
         run: |
           # Run test suite
+          # The tests run against exactly what the action installs: the
+          # dev tools from uv.lock, then requirements.txt on top.
           uv sync --frozen
+          uv pip install --require-hashes --no-deps --only-binary=:all: \
+            -r requirements.txt
           uv run --frozen ruff check
           uv run --frozen pytest -v | tee /tmp/test-output.txt
           {

@@ -11,6 +11,7 @@ receives no optional checksums it would reject.
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import subprocess
 import sys
 import urllib.parse
@@ -259,11 +260,28 @@ def test_failed_install_leaves_nothing(
     assert list(runner_temp.iterdir()) == []
 
 
-def test_requirements_are_pinned_and_hashed() -> None:
+def _pins() -> tuple[list[str], list[str]]:
     lines = upload.REQUIREMENTS.read_text().splitlines()
     pins = [line for line in lines if line and not line.startswith((" ", "#"))]
-    assert any(pin.startswith("boto3==") for pin in pins)
+    return lines, pins
+
+
+def test_requirements_are_pinned_and_hashed() -> None:
+    lines, pins = _pins()
+    names = {pin.split("==")[0] for pin in pins}
+    assert {"boto3", "botocore", "s3transfer"} <= names
     for pin in pins:
         assert "==" in pin, pin
         follow = lines[lines.index(pin) + 1]
         assert follow.strip().startswith("--hash=sha256:"), pin
+
+
+def test_environment_matches_requirements() -> None:
+    """The tests exercise exactly the versions the action installs."""
+    _, pins = _pins()
+    for pin in pins:
+        name, version = pin.split()[0].split("==")
+        assert importlib.metadata.version(name) == version, (
+            f"{name} differs from requirements.txt;"
+            + " run: uv pip install -r requirements.txt"
+        )

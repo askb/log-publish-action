@@ -467,8 +467,13 @@ The pytest suite runs fully offline. It needs
 
 ```shell
 uv sync --frozen
+uv pip install -r requirements.txt
 uv run pytest
 ```
+
+`pyproject.toml` makes `uv pip` check hashes. `uv sync` removes packages
+that `uv.lock` does not list, so repeat the `uv pip install` after each
+sync.
 
 It covers input validation, path derivation, content collection,
 content-type assignment, compression (including gzip round-tripping of
@@ -479,18 +484,30 @@ endpoint, credentials and headers each store receives, and that S3 and
 R2 never share credentials.
 
 CI runs the suite on every supported Python, 3.10 to 3.15. To run it
-locally on a given version:
+locally on a given version, pass it to `uv sync`:
 
 ```shell
-uv run --python 3.15 pytest
+uv sync --frozen --python 3.15
+uv pip install -r requirements.txt
+uv run pytest
 ```
 
-`uv.lock` pins every dependency. After changing it, regenerate the
-runtime requirements the action installs from; CI fails if they drift:
+### Dependencies
 
-```shell
-uv export --frozen --no-dev --no-emit-project -o requirements.txt
-```
+`requirements.txt` is the single source of the runtime dependencies:
+boto3 and every package it needs, each pinned with its hashes. The
+action installs this file, and the tests run against the same pins.
+Dependabot's `pip` ecosystem updates it, rewriting the `--hash` lines
+itself, so its pull requests pass CI with no manual commit. boto3,
+botocore and s3transfer move together in one grouped update.
+
+Because the action installs with `--no-deps`, pip never checks that
+the pins agree. CI installs the file again with dependency resolution
+on and runs `pip check`, so an incompatible combination, or a new
+dependency that is not pinned, fails the build.
+
+`uv.lock` pins the development tools (pytest, ruff) and no runtime
+package; Dependabot's `uv` ecosystem updates it.
 
 ## Troubleshooting
 

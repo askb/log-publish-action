@@ -5,11 +5,16 @@
 # project table only lets uv manage the environment the tests run in;
 # with no [build-system], uv never builds or installs it.
 #
-# The runtime dependency (boto3) is exported from uv.lock into
-# requirements.txt, which the action installs with pip in hash checking
-# mode. Regenerate it after any lock change:
+# The runtime dependencies (boto3 and what it needs) are not listed
+# here. requirements.txt is their single source: the action installs it
+# with pip in hash checking mode, Dependabot's pip ecosystem keeps it
+# current, and the tests install the same file on top of this
+# environment:
 #
-#   uv export --frozen --no-dev --no-emit-project -o requirements.txt
+#   uv sync --frozen
+#   uv pip install -r requirements.txt
+#
+# uv.lock therefore pins the development tools only.
 
 [project]
 name = "log-publish-action"
@@ -18,9 +23,7 @@ description = "Publishes build logs to S3, Cloudflare R2 or workflow artifacts"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
-dependencies = [
-  "boto3==1.43.114",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
