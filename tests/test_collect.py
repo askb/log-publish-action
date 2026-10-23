@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from log_publish import collect
-from log_publish.collect import glob_files
+from log_publish.bashglob import glob_files
 from log_publish.config import Config
 from log_publish.paths import slugify
 from tests.conftest import DERIVED, Runner
