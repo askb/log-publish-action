@@ -75,6 +75,9 @@ ci:
     - go-vet
     - go-mod-tidy
     - golangci-lint
+    # With the pytest it needs for the tests, the hook's environment
+    # exceeds the pre-commit.ci 250MiB size limit. It still runs locally.
+    - basedpyright
   autofix_commit_msg: |
     Chore: Pre-commit autofixes
 
