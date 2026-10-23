@@ -113,6 +113,11 @@ def collect_archive_dir(stager: Stager, workspace: Path, archive_dir: str) -> No
     base = workspace / archive_dir
     if not base.is_dir():
         return
+    # os.walk follows a symlink given as its root, where find -type f
+    # did not, so a linked archives directory could expose runner files.
+    if base.is_symlink() or not _inside(base, workspace.resolve()):
+        warn(f"Skipping {archive_dir}/: it leads outside the workspace")
+        return
     info(f"Collecting {archive_dir}/ ...")
     for dirpath, _dirs, files in os.walk(base):
         for name in files:

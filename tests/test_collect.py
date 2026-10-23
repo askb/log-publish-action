@@ -100,6 +100,18 @@ def test_archives_skip_symlinks(run: Runner, workspace: Path, tmp_path: Path) ->
     assert "leak.log" not in run(workspace).manifest()
 
 
+def test_archives_root_symlink_is_skipped(
+    run: Runner, workspace: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _ = (outside / "host-secret.log").write_text("secret")
+    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    result = run(workspace, INPUT_ARCHIVE_DIR="linked")
+    assert "Skipping linked/: it leads outside the workspace" in result.stdout
+    assert "host-secret.log" not in result.manifest()
+
+
 def test_spaces(run: Runner, workspace: Path) -> None:
     path = workspace / "archives" / "sub dir" / "odd name.log"
     path.parent.mkdir()
