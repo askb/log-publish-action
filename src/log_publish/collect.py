@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from http.client import HTTPMessage, HTTPResponse
+from http.client import HTTPException, HTTPMessage, HTTPResponse
 from pathlib import Path
 from typing import IO, cast
 
@@ -242,8 +242,13 @@ def api_get(url: str, token: str, timeout: float = 60.0) -> bytes:
             "Accept": "application/vnd.github+json",
         },
     )
-    with cast(HTTPResponse, opener.open(request, timeout=timeout)) as response:
-        return response.read()
+    try:
+        with cast(HTTPResponse, opener.open(request, timeout=timeout)) as response:
+            return response.read()
+    except HTTPException as err:
+        # IncompleteRead and friends are not OSErrors; capture stays best
+        # effort either way.
+        raise OSError(f"{type(err).__name__}: {err}") from err
 
 
 def _job_list(body: bytes) -> list[dict[str, object]]:

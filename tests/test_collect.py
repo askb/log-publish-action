@@ -7,7 +7,8 @@ from __future__ import annotations
 import gzip
 import io
 import os
-from http.client import HTTPMessage
+import urllib.request
+from http.client import HTTPMessage, IncompleteRead
 from pathlib import Path
 
 import pytest
@@ -171,7 +172,6 @@ class TestGlob:
 
 class TestConsole:
     def test_redirect_drops_token_off_host(self) -> None:
-        import urllib.request
 
         handler = collect.StripAuthOnRedirect()
         req = urllib.request.Request(
@@ -223,6 +223,31 @@ class TestConsole:
         assert (tmp_path / "console" / "build-jdk-21.log").read_text() == "console text"
         assert not (tmp_path / "console" / "x.log").exists()
         assert "Could not capture console log for x" in capsys.readouterr().out
+
+    def test_truncated_response_is_an_oserror(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class Truncated:
+            def __enter__(self) -> Truncated:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                raise IncompleteRead(b"par", 10)
+
+        class Opener:
+            def open(self, _request: object, timeout: float) -> Truncated:
+                assert timeout > 0
+                return Truncated()
+
+        def build_opener(*_handlers: object) -> Opener:
+            return Opener()
+
+        monkeypatch.setattr(urllib.request, "build_opener", build_opener)
+        with pytest.raises(OSError, match="IncompleteRead"):
+            _ = collect.api_get("https://api.example/x", "t")
 
     def test_list_failure(
         self,
