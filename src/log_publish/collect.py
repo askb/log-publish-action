@@ -8,13 +8,16 @@ the destination; only the final upload stage differs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Generator
 from datetime import datetime, timezone
 from http.client import HTTPException, HTTPMessage, HTTPResponse
 from pathlib import Path
@@ -174,7 +177,10 @@ class StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
         return new
 
 
-def api_get(url: str, token: str, timeout: float = 60.0) -> bytes:
+@contextlib.contextmanager
+def _api_open(
+    url: str, token: str, timeout: float
+) -> Generator[HTTPResponse, None, None]:
     if not url.startswith("https://"):
         raise ValueError("refusing a non https API URL")
     opener = urllib.request.build_opener(StripAuthOnRedirect())
@@ -187,11 +193,36 @@ def api_get(url: str, token: str, timeout: float = 60.0) -> bytes:
     )
     try:
         with cast(HTTPResponse, opener.open(request, timeout=timeout)) as response:
-            return response.read()
+            yield response
     except HTTPException as err:
         # IncompleteRead and friends are not OSErrors; capture stays best
         # effort either way.
         raise OSError(f"{type(err).__name__}: {err}") from err
+
+
+def api_get(url: str, token: str, timeout: float = 60.0) -> bytes:
+    """A small API response, read into memory."""
+    with _api_open(url, token, timeout) as response:
+        return response.read()
+
+
+def api_download(url: str, token: str, dest: Path, timeout: float = 60.0) -> None:
+    """Stream a possibly large response to dest.
+
+    The body goes to a temporary name beside dest and is renamed only once
+    complete, so a truncated download never leaves a partial file behind
+    to be published.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".part")
+    try:
+        with os.fdopen(fd, "wb") as handle, _api_open(url, token, timeout) as response:
+            shutil.copyfileobj(response, handle, 1024 * 1024)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dest)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def _job_list(body: bytes) -> list[dict[str, object]]:
@@ -233,14 +264,12 @@ def capture_console(stager: Stager, cfg: Config) -> None:
         if not job_id:
             continue
         url = f"{api}/repos/{repo}/actions/jobs/{job_id}/logs"
+        dest = stager.staging / "console" / f"{slugify(name)}.log"
         try:
-            body = api_get(url, cfg.github_token)
+            api_download(url, cfg.github_token, dest)
         except (OSError, ValueError):
             warn(f"Could not capture console log for {name}")
             continue
-        dest = stager.staging / "console" / f"{slugify(name)}.log"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        _ = dest.write_bytes(body)
         info(f"  captured {name}")
 
 

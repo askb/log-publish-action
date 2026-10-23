@@ -20,6 +20,27 @@ from log_publish.paths import slugify
 from tests.conftest import DERIVED, Runner
 
 
+class Truncated(io.RawIOBase):
+    """A response body that ends early, as http.client reports it."""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, _buffer: object) -> int:
+        raise IncompleteRead(b"par", 10)
+
+
+class Opener:
+    """Stands in for urllib's opener, returning a canned body."""
+
+    def __init__(self, body: io.RawIOBase | io.BytesIO) -> None:
+        self.body: io.RawIOBase | io.BytesIO = body
+
+    def open(self, _request: object, timeout: float) -> io.RawIOBase | io.BytesIO:
+        assert timeout > 0
+        return self.body
+
+
 def test_derived_path(run: Runner, workspace: Path) -> None:
     result = run(workspace)
     assert f"s3://logs-example-org/{DERIVED}/" in result.stdout
@@ -235,16 +256,23 @@ class TestConsole:
     ) -> None:
         seen: list[str] = []
 
-        def fake_open(url: str, token: str, _timeout: float = 60.0) -> bytes:
+        def fake_get(url: str, token: str, _timeout: float = 60.0) -> bytes:
             seen.append(url)
             assert token == "tok"
-            if url.endswith("per_page=100"):
-                return b'{"jobs": [{"id": 1, "name": "Build / JDK 21"}, {"id": 2, "name": "x"}]}'
+            return b'{"jobs": [{"id": 1, "name": "Build / JDK 21"}, {"id": 2, "name": "x"}]}'
+
+        def fake_download(
+            url: str, token: str, dest: Path, _timeout: float = 60.0
+        ) -> None:
+            seen.append(url)
+            assert token == "tok"
             if url.endswith("/jobs/2/logs"):
                 raise OSError("gone")
-            return b"console text"
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            _ = dest.write_bytes(b"console text")
 
-        monkeypatch.setattr(collect, "api_get", fake_open)
+        monkeypatch.setattr(collect, "api_get", fake_get)
+        monkeypatch.setattr(collect, "api_download", fake_download)
         cfg = Config.from_env(
             {
                 "INPUT_GITHUB_TOKEN": "tok",
@@ -264,27 +292,38 @@ class TestConsole:
     def test_truncated_response_is_an_oserror(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        class Truncated:
-            def __enter__(self) -> Truncated:
-                return self
-
-            def __exit__(self, *_args: object) -> None:
-                return None
-
-            def read(self) -> bytes:
-                raise IncompleteRead(b"par", 10)
-
-        class Opener:
-            def open(self, _request: object, timeout: float) -> Truncated:
-                assert timeout > 0
-                return Truncated()
-
         def build_opener(*_handlers: object) -> Opener:
-            return Opener()
+            return Opener(Truncated())
 
         monkeypatch.setattr(urllib.request, "build_opener", build_opener)
         with pytest.raises(OSError, match="IncompleteRead"):
             _ = collect.api_get("https://api.example/x", "t")
+
+    def test_download_streams_to_disk(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        body = b"line\n" * 300_000
+
+        def build_opener(*_handlers: object) -> Opener:
+            return Opener(io.BytesIO(body))
+
+        monkeypatch.setattr(urllib.request, "build_opener", build_opener)
+        dest = tmp_path / "console" / "job.log"
+        collect.api_download("https://api.example/x", "t", dest)
+        assert dest.read_bytes() == body
+        assert sorted(p.name for p in dest.parent.iterdir()) == ["job.log"]
+
+    def test_truncated_download_leaves_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def build_opener(*_handlers: object) -> Opener:
+            return Opener(Truncated())
+
+        monkeypatch.setattr(urllib.request, "build_opener", build_opener)
+        dest = tmp_path / "console" / "job.log"
+        with pytest.raises(OSError, match="IncompleteRead"):
+            collect.api_download("https://api.example/x", "t", dest)
+        assert list(dest.parent.iterdir()) == []
 
     def test_list_failure(
         self,
