@@ -125,11 +125,45 @@ def test_posix_class_pattern(run: Runner, workspace: Path) -> None:
     assert "testx.log" not in keys
 
 
-@pytest.mark.parametrize("pattern", ["/etc/passwd", "../../../etc/passwd"])
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "/etc/passwd",
+        "../../../etc/passwd",
+        "\\.\\./\\.\\./\\.\\./etc/passwd",
+        ".\\./etc/passwd",
+    ],
+)
 def test_unsafe_pattern(run: Runner, workspace: Path, pattern: str) -> None:
     result = run(workspace, INPUT_ARCHIVE_PATTERNS=pattern)
     assert "Ignoring unsafe pattern" in result.stdout
     assert "etc/passwd" not in result.manifest()
+
+
+def test_escaped_parent_pattern(run: Runner, workspace: Path) -> None:
+    pattern = f"\\.\\./{workspace.name}/target/SFT/karaf.log"
+    result = run(workspace, INPUT_ARCHIVE_PATTERNS=pattern)
+    assert "Ignoring unsafe pattern" in result.stdout
+    assert not [key for key in result.manifest() if ".." in key]
+
+
+def test_parent_match_is_not_staged(
+    workspace: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    staging = tmp_path / "out" / "staging"
+    staging.mkdir(parents=True)
+    escaped = workspace / ".." / workspace.name / "target" / "SFT" / "karaf.log"
+
+    def parent_match(_root: Path, _pattern: str) -> list[Path]:
+        return [escaped]
+
+    monkeypatch.setattr(collect, "glob_files", parent_match)
+    collect.collect_patterns(collect.Stager(staging), workspace, "karaf.log")
+    assert "Skipping file outside the workspace" in capsys.readouterr().out
+    assert not any(staging.parent.rglob("karaf.log"))
 
 
 def test_symlink_out_of_workspace(run: Runner, workspace: Path, tmp_path: Path) -> None:

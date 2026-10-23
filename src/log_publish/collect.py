@@ -89,14 +89,16 @@ def collect_patterns(stager: Stager, workspace: Path, patterns: str) -> None:
         pattern = raw.strip()
         if not pattern:
             continue
-        if pattern.startswith("/") or ".." in pattern:
+        # Bash reads \.\. as .., so escapes cannot hide a parent part.
+        if pattern.startswith("/") or ".." in pattern.replace("\\", ""):
             warn(f"Ignoring unsafe pattern: {pattern}")
             continue
         matched = 0
         for src in glob_files(workspace, pattern):
             rel = src.relative_to(workspace).as_posix()
-            # A symlink in the build tree must not publish a host file.
-            if not _inside(src, root):
+            # A symlink in the build tree must not publish a host file,
+            # and a parent part would stage outside the staging tree.
+            if ".." in Path(rel).parts or not _inside(src, root):
                 warn(f"Skipping file outside the workspace: {rel}")
                 continue
             if stager.stage(src, rel):
