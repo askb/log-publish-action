@@ -11,6 +11,14 @@ from __future__ import annotations
 
 import sys
 
+_ZWSP = "\u200b"
+
+
+def _neutralize(message: str) -> str:
+    """Break the markers that make the runner treat a line as a command:
+    "::" (anywhere it could start one) and the legacy "##["."""
+    return message.replace("::", f":{_ZWSP}:").replace("##[", f"#{_ZWSP}#[")
+
 
 def _escape(message: str) -> str:
     return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -24,7 +32,7 @@ def _emit(line: str) -> None:
 
 
 def info(message: str) -> None:
-    _emit(message.replace("\r", "\\r").replace("\n", "\\n"))
+    _emit(_neutralize(message.replace("\r", "\\r").replace("\n", "\\n")))
 
 
 def warn(message: str) -> None:
