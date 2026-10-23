@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Iterator
@@ -208,7 +209,8 @@ def sys_info() -> str:
 
 
 class StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
-    """Drop the token when a redirect leaves the API host.
+    """Drop the token when a redirect leaves the API host, and refuse
+    any redirect away from https.
 
     The job log endpoint redirects to blob storage. urllib, unlike curl,
     would otherwise forward the Authorization header there.
@@ -223,6 +225,8 @@ class StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
         headers: HTTPMessage,
         newurl: str,
     ) -> urllib.request.Request | None:
+        if urllib.parse.urlsplit(newurl).scheme != "https":
+            raise urllib.error.URLError("refusing a redirect away from https")
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new is not None:
             old_host = urllib.parse.urlsplit(req.full_url).netloc

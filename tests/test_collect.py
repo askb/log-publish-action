@@ -172,7 +172,6 @@ class TestGlob:
 
 class TestConsole:
     def test_redirect_drops_token_off_host(self) -> None:
-
         handler = collect.StripAuthOnRedirect()
         req = urllib.request.Request(
             "https://api.github.com/x", headers={"Authorization": "Bearer t"}
@@ -185,6 +184,16 @@ class TestConsole:
         )
         assert off is not None and not off.has_header("Authorization")
         assert same is not None and same.has_header("Authorization")
+
+    def test_redirect_refuses_http_downgrade(self) -> None:
+        handler = collect.StripAuthOnRedirect()
+        req = urllib.request.Request(
+            "https://api.example/jobs/1/logs", headers={"Authorization": "Bearer t"}
+        )
+        with pytest.raises(OSError, match="away from https"):
+            _ = handler.redirect_request(
+                req, io.BytesIO(), 302, "Found", HTTPMessage(), "http://api.example/log"
+            )
 
     def test_rejects_plain_http(self) -> None:
         with pytest.raises(ValueError):
