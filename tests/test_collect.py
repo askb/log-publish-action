@@ -7,9 +7,11 @@ from __future__ import annotations
 import gzip
 import io
 import os
+import socket
 import urllib.request
-from http.client import HTTPMessage, IncompleteRead
+from http.client import HTTPMessage, HTTPResponse, IncompleteRead
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -30,13 +32,29 @@ class Truncated(io.RawIOBase):
         raise IncompleteRead(b"par", 10)
 
 
+class RawSocket:
+    """Feeds canned bytes to http.client as if read from a socket."""
+
+    def __init__(self, raw: bytes) -> None:
+        self.raw: bytes = raw
+
+    def makefile(self, _mode: str) -> io.BufferedReader:
+        return io.BufferedReader(io.BytesIO(self.raw))
+
+
+def http_response(raw: bytes) -> HTTPResponse:
+    response = HTTPResponse(cast(socket.socket, cast(object, RawSocket(raw))))
+    response.begin()
+    return response
+
+
 class Opener:
     """Stands in for urllib's opener, returning a canned body."""
 
-    def __init__(self, body: io.RawIOBase | io.BytesIO) -> None:
-        self.body: io.RawIOBase | io.BytesIO = body
+    def __init__(self, body: io.IOBase) -> None:
+        self.body: io.IOBase = body
 
-    def open(self, _request: object, timeout: float) -> io.RawIOBase | io.BytesIO:
+    def open(self, _request: object, timeout: float) -> io.IOBase:
         assert timeout > 0
         return self.body
 
@@ -305,7 +323,8 @@ class TestConsole:
         body = b"line\n" * 300_000
 
         def build_opener(*_handlers: object) -> Opener:
-            return Opener(io.BytesIO(body))
+            head = f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n"
+            return Opener(http_response(head.encode() + body))
 
         monkeypatch.setattr(urllib.request, "build_opener", build_opener)
         dest = tmp_path / "console" / "job.log"
@@ -324,6 +343,34 @@ class TestConsole:
         with pytest.raises(OSError, match="IncompleteRead"):
             collect.api_download("https://api.example/x", "t", dest)
         assert list(dest.parent.iterdir()) == []
+
+    def test_early_eof_leaves_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The server closes after 10 of the 100 bytes it advertised.
+        raw = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" + b"x" * 10
+
+        def build_opener(*_handlers: object) -> Opener:
+            return Opener(http_response(raw))
+
+        monkeypatch.setattr(urllib.request, "build_opener", build_opener)
+        dest = tmp_path / "console" / "job.log"
+        with pytest.raises(OSError, match="90 bytes missing"):
+            collect.api_download("https://api.example/x", "t", dest)
+        assert list(dest.parent.iterdir()) == []
+
+    def test_complete_http_response(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        raw = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nfull"
+
+        def build_opener(*_handlers: object) -> Opener:
+            return Opener(http_response(raw))
+
+        monkeypatch.setattr(urllib.request, "build_opener", build_opener)
+        dest = tmp_path / "console" / "job.log"
+        collect.api_download("https://api.example/x", "t", dest)
+        assert dest.read_bytes() == b"full"
 
     def test_list_failure(
         self,

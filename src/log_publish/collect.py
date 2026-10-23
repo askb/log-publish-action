@@ -218,6 +218,10 @@ def api_download(url: str, token: str, dest: Path, timeout: float = 60.0) -> Non
     try:
         with os.fdopen(fd, "wb") as handle, _api_open(url, token, timeout) as response:
             shutil.copyfileobj(response, handle, 1024 * 1024)
+            # read(amt) returns b"" at an early EOF rather than raising,
+            # so check what the Content-Length still promised.
+            if response.length:
+                raise OSError(f"IncompleteRead: {response.length} bytes missing")
         os.chmod(tmp, 0o644)
         os.replace(tmp, dest)
     except BaseException:
