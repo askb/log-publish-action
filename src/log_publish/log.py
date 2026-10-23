@@ -9,6 +9,7 @@ breaks are escaped the way the runner expects in command data.
 
 from __future__ import annotations
 
+import re
 import sys
 
 _ZWSP = "\u200b"
@@ -16,8 +17,10 @@ _ZWSP = "\u200b"
 
 def _neutralize(message: str) -> str:
     """Break the markers that make the runner treat a line as a command:
-    "::" (anywhere it could start one) and the legacy "##["."""
-    return message.replace("::", f":{_ZWSP}:").replace("##[", f"#{_ZWSP}#[")
+    "::" (anywhere it could start one) and the legacy "##[". Lookaheads
+    also catch overlapping runs such as ":::"."""
+    message = re.sub(r":(?=:)", f":{_ZWSP}", message)
+    return re.sub(r"#(?=#\[)", f"#{_ZWSP}", message)
 
 
 def _escape(message: str) -> str:

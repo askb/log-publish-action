@@ -16,6 +16,9 @@ from log_publish.log import error, info, warn
         "  ::add-mask::x",
         "a\n::warning::b",
         "x ##[error]legacy",
+        ":::add-mask :::secret.log",
+        "::::",
+        "x ###[error]y",
     ],
 )
 def test_info_is_never_a_command(
