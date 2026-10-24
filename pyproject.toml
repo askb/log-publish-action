@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
+
+# This repository is a composite action, not a Python package. The
+# project table only lets uv manage the environment the tests run in;
+# with no [build-system], uv never builds or installs it.
+#
+# The runtime dependency (boto3) is exported from uv.lock into
+# requirements.txt, which the action installs with pip in hash checking
+# mode. Regenerate it after any lock change:
+#
+#   uv export --frozen --no-dev --no-emit-project -o requirements.txt
+
+[project]
+name = "log-publish-action"
+version = "0.0.0"
+description = "Publishes build logs to S3, Cloudflare R2 or workflow artifacts"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = [
+  "boto3==1.43.111",
+]
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "ruff==0.17.1",
+]
+
+[tool.uv.pip]
+# Covers ad-hoc "uv pip install" only; installs from uv.lock always
+# verify hashes. The release-age cooldown is the Dependabot cooldown,
+# not exclude-newer, which would also hold back security updates.
+require-hashes = true
+verify-hashes = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src"
+# boto3 is loaded at run time from a hash pinned install, so the
+# isolated pre-commit environment has neither it nor its stubs.
+ignore_missing_imports = true
+
+[tool.basedpyright]
+# The floor action.yaml enforces.
+pythonVersion = "3.10"
+pythonPlatform = "All"
+typeCheckingMode = "recommended"
+include = ["src", "tests"]
+extraPaths = ["src", "."]
+# typing.override needs Python 3.12; the floor is 3.10.
+reportImplicitOverride = false

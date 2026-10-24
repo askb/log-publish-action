@@ -44,9 +44,10 @@ inputs:
   # Path construction
   s3_path:
     description: >-
-      Full path within the bucket. Overrides the derived path. Must be at
-      least three segments deep, since the first three receive the index
-      marker that refreshes directory listings.
+      Full path within the bucket. Overrides the derived path. With
+      index_markers on, it must be at least three segments deep, since the
+      first three receive the index marker that refreshes directory
+      listings.
     required: false
     default: ''
   path_prefix:
@@ -252,6 +253,10 @@ runs:
         INPUT_PATH_PREFIX: "${{ inputs.path_prefix }}"
         INPUT_NAMESPACE: "${{ inputs.namespace }}"
         INPUT_CAPTURE_CONSOLE: "${{ inputs.capture_console }}"
+        INPUT_INCLUDE_SYSINFO: "${{ inputs.include_sysinfo }}"
+        INPUT_COMPRESS: "${{ inputs.compress }}"
+        INPUT_COMPRESS_SUFFIX: "${{ inputs.compress_suffix }}"
+        INPUT_INDEX_MARKERS: "${{ inputs.index_markers }}"
         INPUT_R2_BUCKET: "${{ inputs.r2_bucket }}"
         INPUT_R2_ACCOUNT_ID: "${{ inputs.r2_account_id }}"
         INPUT_R2_ENDPOINT_URL: "${{ inputs.r2_endpoint_url }}"
@@ -260,8 +265,19 @@ runs:
         INPUT_R2_INDEX: "${{ inputs.r2_index }}"
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
+        INPUT_PERMIT_FAIL: "${{ inputs.permit_fail }}"
+      # The runner's own python3; the action needs no setup-python step.
+      # -I and -E -s keep PYTHON* variables and user site packages out,
+      # so no sitecustomize from the caller runs with these secrets.
+      # main.py keeps -E -s: -I would also drop the script's own
+      # directory (the action's src/) from sys.path.
       run: |
-        bash "$GITHUB_ACTION_PATH/scripts/validate.sh"
+        if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))'
+        then
+          echo "::error::log-publish-action needs python3 >= 3.10 on PATH"
+          exit 1
+        fi
+        python3 -E -s "$GITHUB_ACTION_PATH/src/main.py" validate
 
     - name: 'Collect and publish logs'
       id: publish
@@ -294,8 +310,10 @@ runs:
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
         INPUT_PERMIT_FAIL: "${{ inputs.permit_fail }}"
+      # boto3 is installed from the hash pinned requirements.txt, only
+      # when something is uploaded to S3 or R2.
       run: |
-        bash "$GITHUB_ACTION_PATH/scripts/publish-logs.sh"
+        python3 -E -s "$GITHUB_ACTION_PATH/src/main.py" publish
 
     # Runs whenever the script handed over a staged tree for an artifact.
     # The script parses the destination list, so key off its outputs

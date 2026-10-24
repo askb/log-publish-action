@@ -20,15 +20,20 @@ concurrency:
 permissions: {}
 
 jobs:
-  ### Shell test suite ###
-  # Runs entirely offline against dry_run, so it needs no AWS
-  # credentials and no network egress.
-  shell-tests:
-    name: "Shell test suite"
+  ### Python test suite ###
+  # Runs entirely offline: uploads go to recording fakes or to real
+  # boto3 clients whose requests are intercepted before they are sent.
+  # Covers the oldest supported Python and a current one.
+  python-tests:
+    name: "Python test suite (${{ matrix.python }})"
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
     steps:
       # Load the egress allow-list out-of-band from the
       # organisation's .github repository and publish it as
@@ -52,22 +57,38 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: "Shellcheck"
+      - name: "Install uv"
+        # yamllint disable-line rule:line-length
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.4"
+          python-version: "${{ matrix.python }}"
+
+      - name: "Check the lock and the runtime requirements"
         shell: bash
         run: |
-          # Shellcheck
-          shellcheck -x scripts/*.sh tests/*.sh
-          echo "Shellcheck clean ✅" >> "$GITHUB_STEP_SUMMARY"
+          # Check the lock and the runtime requirements
+          # Fail if uv.lock is stale, or if requirements.txt, which the
+          # action installs from, no longer matches it (Dependabot only
+          # updates uv.lock).
+          uv lock --check
+          uv export --frozen --no-dev --no-emit-project \
+            -o requirements.txt
+          git diff --exit-code -- requirements.txt
 
       - name: "Run test suite"
         shell: bash
+        env:
+          PYTHON_VERSION: "${{ matrix.python }}"
         run: |
           # Run test suite
-          bash tests/run-tests.sh | tee /tmp/test-output.txt
+          uv sync --frozen
+          uv run --frozen ruff check
+          uv run --frozen pytest -v | tee /tmp/test-output.txt
           {
-            echo '### Shell test suite'
+            echo "### Python $PYTHON_VERSION test suite"
             echo '```text'
-            tail -5 /tmp/test-output.txt
+            tail -3 /tmp/test-output.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

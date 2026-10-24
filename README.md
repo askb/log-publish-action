@@ -64,7 +64,7 @@ Collect `archives/` and publish it, whatever the build result:
 
 ### Workflow artifacts instead of S3
 
-This needs no bucket, no credentials and no AWS CLI:
+This needs no bucket, no credentials and no network access to PyPI:
 
 ```yaml
 - name: "Publish build logs"
@@ -322,7 +322,9 @@ also writes:
 The log server regenerates `index.html` from an S3 event. The action
 writes, then deletes, a marker object in each of the first three path
 segments to trigger that regeneration. A shallower path leaves parts of
-the hierarchy unbrowsable, so the action rejects one.
+the hierarchy unbrowsable, so the action rejects one. Setting
+`index_markers` to `false` lifts the rule, and the action then accepts a
+path of any depth.
 
 ## Deviations From The Jenkins Behaviour
 
@@ -360,8 +362,8 @@ The behaviour also varies by interpreter. On Python 3.14,
 loses its `Content-Encoding` entirely — served as binary garbage. This
 is a latent regression that appears purely on a newer interpreter.
 
-This action uses an explicit extension-to-type table in shell, which
-does not depend on any mime database.
+This action uses an explicit extension-to-type table, which does not
+depend on any mime database.
 
 ### 3. Index markers use cumulative prefixes
 
@@ -377,7 +379,7 @@ This action writes cumulative prefixes.
 ### AWS credentials
 
 These apply when `destination` is `s3` or `both`. Publishing to
-artifacts alone requires no bucket, no credentials and no AWS CLI.
+artifacts alone requires no bucket and no credentials.
 
 The action needs `s3:PutObject` and `s3:DeleteObject` on the target
 prefix. Use OIDC rather than long-lived keys:
@@ -420,9 +422,10 @@ start of a multi-hour build can expire before the upload runs.
 ### R2 credentials and bucket setup
 
 These apply when `destination` includes `r2`. R2 speaks the S3 API, so
-the action reuses the AWS CLI against
-`https://<account_id>.r2.cloudflarestorage.com` with region `auto`. The
-CLI skips optional checksums unless R2 requires them.
+the action uses a second boto3 client against
+`https://<account_id>.r2.cloudflarestorage.com` with region `auto`. That
+client carries the R2 token explicitly, never the AWS session, and skips
+the optional checksums R2 rejects.
 
 On the Cloudflare side:
 
@@ -443,23 +446,44 @@ callers need `secrets: inherit` or explicit secret mappings.
 
 ### Tooling
 
-`aws` CLI and `gzip` must be present on the runner. Both are present on
-GitHub-hosted runners; self-hosted runners may need them installed. The
-action validates this before it does any work.
+The action runs on the runner's own `python3`, version 3.10 or later,
+with `pip`. GitHub-hosted Ubuntu runners have both; self-hosted runners
+may need them installed. The action validates this before it does any
+work, and needs no `setup-python` step.
+
+Uploads to S3 or R2 use boto3, which the action installs at run time
+from the hash-pinned `requirements.txt` into the runner temp directory.
+pip refuses any package or hash not in that file. A dry run or an
+artifact destination alone installs nothing.
+
+Jobs that run harden-runner with `egress-policy: block` must allow
+`pypi.org:443` and `files.pythonhosted.org:443` for that install, as
+well as the S3 or R2 endpoint.
 
 ## Testing
 
-The test suite runs fully offline, driven through `dry_run`:
+The pytest suite runs fully offline. It needs
+[uv](https://docs.astral.sh/uv/):
 
 ```shell
-bash tests/run-tests.sh
+uv sync --frozen
+uv run pytest
 ```
 
 It covers input validation, path derivation, content collection,
 content-type assignment, compression (including gzip round-tripping of
-the actual staged bytes), outputs and robustness. R2 and dual publishing
-run against a stub `aws` that records each call with the credentials and
-endpoint in effect, proving the two stores never share credentials.
+the actual staged bytes), outputs and robustness. Upload logic runs
+against recording fakes. The wire tests then drive real boto3 clients
+and intercept each request before it leaves the process, proving which
+endpoint, credentials and headers each store receives, and that S3 and
+R2 never share credentials.
+
+`uv.lock` pins every dependency. After changing it, regenerate the
+runtime requirements the action installs from; CI fails if they drift:
+
+```shell
+uv export --frozen --no-dev --no-emit-project -o requirements.txt
+```
 
 ## Troubleshooting
 
