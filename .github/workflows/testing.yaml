@@ -23,7 +23,8 @@ jobs:
   ### Python test suite ###
   # Runs entirely offline: uploads go to recording fakes or to real
   # boto3 clients whose requests are intercepted before they are sent.
-  # Covers the oldest supported Python and a current one.
+  # Covers every supported Python: 3.10 is end of life, but it stays
+  # while Ubuntu 22.04 runners still ship it as their python3.
   python-tests:
     name: "Python test suite (${{ matrix.python }})"
     runs-on: ubuntu-latest
@@ -33,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       # Load the egress allow-list out-of-band from the
       # organisation's .github repository and publish it as

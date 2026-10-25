@@ -478,6 +478,13 @@ and intercept each request before it leaves the process, proving which
 endpoint, credentials and headers each store receives, and that S3 and
 R2 never share credentials.
 
+CI runs the suite on every supported Python, 3.10 to 3.15. To run it
+locally on a given version:
+
+```shell
+uv run --python 3.15 pytest
+```
+
 `uv.lock` pins every dependency. After changing it, regenerate the
 runtime requirements the action installs from; CI fails if they drift:
 
