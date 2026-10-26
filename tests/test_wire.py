@@ -24,7 +24,7 @@ import pytest
 from log_publish import upload
 from log_publish.config import Config
 from log_publish.upload import ClientFactory, ObjectStore
-from tests.conftest import DERIVED, R2_ACCOUNT, R2_ENV, Runner
+from tests.conftest import BASE_ENV, DERIVED, R2_ACCOUNT, R2_ENV, Runner
 
 
 class _Request(Protocol):
@@ -133,7 +133,7 @@ def test_dual_publish_on_the_wire(
     assert r2 and s3
 
     for sent in r2:
-        assert sent.host.endswith(f"{R2_ACCOUNT}.r2.cloudflarestorage.com")
+        assert sent.host == f"{R2_ACCOUNT}.r2.cloudflarestorage.com"
         auth = sent.headers["authorization"]
         assert "Credential=r2-key-id/" in auth
         assert "/auto/s3/aws4_request" in auth
@@ -144,7 +144,7 @@ def test_dual_publish_on_the_wire(
         assert "x-amz-sdk-checksum-algorithm" not in sent.headers
 
     for sent in s3:
-        assert sent.host.endswith("amazonaws.com")
+        assert sent.host == f"{BASE_ENV['INPUT_S3_BUCKET']}.s3.amazonaws.com"
         assert "Credential=AKIAOIDCSESSION/" in sent.headers["authorization"]
         assert "/us-east-1/s3/aws4_request" in sent.headers["authorization"]
         assert sent.headers["x-amz-security-token"] == "oidc-session"
@@ -180,7 +180,7 @@ def test_r2_explicit_endpoint(run: Runner, workspace: Path, wire: list[Sent]) ->
         **{**R2_ENV, "INPUT_R2_ENDPOINT_URL": "https://eu.r2.example"},
     )
     assert result.status == 0
-    assert wire and all(s.host.endswith("eu.r2.example") for s in wire)
+    assert wire and all(s.host == "eu.r2.example" for s in wire)
 
 
 def test_r2_ignores_an_unknown_aws_profile(
