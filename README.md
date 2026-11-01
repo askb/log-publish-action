@@ -47,6 +47,11 @@ output — become durable, linkable URLs.
 
 ## Usage Examples
 
+The examples pin the action to a commit SHA, with the release tag as a
+trailing comment, as the organisation requires for remote `uses:`
+references. Dependabot's `github-actions` ecosystem keeps such pins
+current and rewrites the comment with each bump.
+
 ### Basic
 
 Collect `archives/` and publish it, whatever the build result:
@@ -56,7 +61,7 @@ Collect `archives/` and publish it, whatever the build result:
 ```yaml
 - name: "Publish build logs"
   if: always()
-  uses: lfreleng-actions/log-publish-action@main
+  uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
   with:
     s3_bucket: "logs.example.org"
     base_url: "https://logs.example.org"
@@ -69,7 +74,7 @@ This needs no bucket, no credentials and no network access to PyPI:
 ```yaml
 - name: "Publish build logs"
   if: always()
-  uses: lfreleng-actions/log-publish-action@main
+  uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
   with:
     destination: "artifact"
     artifact_name: "build-logs"
@@ -85,7 +90,7 @@ job:
 ```yaml
 - name: "Publish build logs"
   if: always()
-  uses: lfreleng-actions/log-publish-action@main
+  uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
   with:
     destination: "r2"
     r2_bucket: ${{ vars.R2_LOG_BUCKET }}
@@ -107,7 +112,7 @@ List both stores. The first one listed that has a public URL becomes
     aws-region: ${{ vars.S3_LOG_REGION }}
 - name: "Publish build logs"
   if: always()
-  uses: lfreleng-actions/log-publish-action@main
+  uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
   with:
     destination: "s3,r2"
     s3_bucket: ${{ vars.S3_LOG_BUCKET }}
@@ -124,7 +129,7 @@ List both stores. The first one listed that has a public URL becomes
 ```yaml
 - name: "Publish build logs"
   if: always()
-  uses: lfreleng-actions/log-publish-action@main
+  uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
   with:
     s3_bucket: "logs.example.org"
     base_url: "https://logs.example.org"
@@ -141,7 +146,7 @@ or its internal references break.
 ```yaml
 - name: "Publish Allure report"
   if: always()
-  uses: lfreleng-actions/log-publish-action@main
+  uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
   with:
     s3_bucket: "logs.example.org"
     base_url: "https://logs.example.org"
@@ -163,7 +168,7 @@ strategy:
 steps:
   - name: "Publish build logs"
     if: always()
-    uses: lfreleng-actions/log-publish-action@main
+    uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
     with:
       s3_bucket: "logs.example.org"
       job_name: "build-jdk${{ matrix.jdk }}"
@@ -189,7 +194,7 @@ publish-logs:
         role-to-assume: ${{ vars.AWS_LOG_ROLE_ARN }}
         aws-region: ${{ vars.S3_LOG_REGION }}
 
-    - uses: lfreleng-actions/log-publish-action@main
+    - uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
       with:
         s3_bucket: ${{ vars.S3_LOG_BUCKET }}
         base_url: ${{ vars.LOG_BASE_URL }}
@@ -228,12 +233,16 @@ Pin the destination at the workflow layer rather than in each repository.
 One organisation variable then moves an entire fleet, with no action
 release and no change to any calling repository:
 
+<!-- markdownlint-disable MD013 -->
+
 ```yaml
-- uses: lfreleng-actions/log-publish-action@v1
+- uses: lfreleng-actions/log-publish-action@f9dcb75646938a12517ec8a85dac0acba9f96eca # v0.2.1
   with:
     destination: ${{ vars.LOG_PUBLISH_DESTINATION || 's3' }}
     s3_bucket: ${{ vars.S3_LOG_BUCKET }}
 ```
+
+<!-- markdownlint-enable MD013 -->
 
 That matters because the log server is infrastructure. Should it retire
 on cost grounds, the collection, console capture, metadata and
