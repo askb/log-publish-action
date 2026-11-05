@@ -83,6 +83,8 @@ class Config:
     r2_base_url: str = ""
     r2_index: str = "true"
     artifact_name: str = "build-logs"
+    artifact_retention_days: str = ""
+    artifact_if_no_files_found: str = "warn"
     github_token: str = field(default="", repr=False)
     dry_run: str = "false"
     permit_fail: str = "true"
@@ -120,6 +122,10 @@ class Config:
             r2_base_url=_get(env, "INPUT_R2_BASE_URL"),
             r2_index=_get(env, "INPUT_R2_INDEX", "true"),
             artifact_name=_get(env, "INPUT_ARTIFACT_NAME", "build-logs"),
+            artifact_retention_days=_get(env, "INPUT_ARTIFACT_RETENTION_DAYS"),
+            artifact_if_no_files_found=_get(
+                env, "INPUT_ARTIFACT_IF_NO_FILES_FOUND", "warn"
+            ),
             github_token=_get(env, "INPUT_GITHUB_TOKEN"),
             dry_run=_get(env, "INPUT_DRY_RUN", "false"),
             permit_fail=_get(env, "INPUT_PERMIT_FAIL", "true"),

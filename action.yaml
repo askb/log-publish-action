@@ -263,6 +263,9 @@ runs:
         INPUT_R2_ACCESS_KEY_ID: "${{ inputs.r2_access_key_id }}"
         INPUT_R2_SECRET_ACCESS_KEY: "${{ inputs.r2_secret_access_key }}"
         INPUT_R2_INDEX: "${{ inputs.r2_index }}"
+        INPUT_ARTIFACT_RETENTION_DAYS: "${{ inputs.artifact_retention_days }}"
+        # yamllint disable-line rule:line-length
+        INPUT_ARTIFACT_IF_NO_FILES_FOUND: "${{ inputs.artifact_if_no_files_found }}"
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
         INPUT_PERMIT_FAIL: "${{ inputs.permit_fail }}"

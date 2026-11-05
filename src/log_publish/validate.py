@@ -18,6 +18,9 @@ from .paths import trim_slashes
 S3_BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 R2_BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]")
 R2_ACCOUNT_RE = re.compile(r"[0-9a-f]{32}")
+# What upload-artifact accepts on a public repository.
+RETENTION_DAYS = range(1, 91)
+IF_NO_FILES_FOUND = ("warn", "error", "ignore")
 
 
 class ValidationError(Exception):
@@ -92,6 +95,19 @@ def validate(cfg: Config, pip_available: bool | None = None) -> None:
     for name, value in flags.items():
         if value not in ("true", "false"):
             raise ValidationError(f"{name} must be 'true' or 'false', got '{value}' ❌")
+
+    # upload-artifact reads these itself, but only once collection has
+    # run; checking here fails a typo before any work is done.
+    days = cfg.artifact_retention_days
+    if days and not (days.isdecimal() and int(days) in RETENTION_DAYS):
+        raise ValidationError(
+            f"artifact_retention_days must be empty or 1 to 90, got '{days}' ❌"
+        )
+    if cfg.artifact_if_no_files_found not in IF_NO_FILES_FOUND:
+        raise ValidationError(
+            "artifact_if_no_files_found must be warn, error or ignore,"
+            + f" got '{cfg.artifact_if_no_files_found}' ❌"
+        )
 
     if cfg.s3_path:
         # Index markers go to the first three path segments; a shallower

@@ -137,7 +137,6 @@ def test_accepts(env: dict[str, str]) -> None:
     assert check(**env) == ""
 
 
-@pytest.mark.xfail(strict=True, reason="artifact inputs are not validated yet")
 @pytest.mark.parametrize(
     ("env", "message"),
     [
