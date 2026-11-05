@@ -249,23 +249,107 @@ jobs:
           echo "Artifact destination verified: ${FILE_COUNT} file(s) ✅"
 
       # Publishing must never mask the result of the build that produced
-      # the logs, so an unreachable bucket is tolerated by default.
+      # the logs, so an unreachable bucket is tolerated by default. A dry
+      # run makes no S3 calls and so can never fail, so these legs really
+      # attempt the upload. The action installs the pinned boto3, and the
+      # runner holds no AWS credentials, so every attempt fails while
+      # signing, before a request leaves the process; no bucket is
+      # touched. A broken install or client would produce the same
+      # counts from the outside, so this leg drives the publish step
+      # directly and reads its log: the install must run, the client
+      # must be created, and the failure must be the credential one.
+      - name: "Publish step fails at signing, not before"
+        shell: bash
+        env:
+          # Without credentials boto3 would otherwise probe the instance
+          # metadata endpoint, which only adds a timeout per attempt.
+          AWS_EC2_METADATA_DISABLED: "true"
+          INPUT_S3_BUCKET: "logs-example-org"
+          INPUT_NAMESPACE: "gha-test"
+          INPUT_ARCHIVE_PATTERNS: "target/SFT/**"
+          INPUT_INCLUDE_SYSINFO: "false"
+          INPUT_PERMIT_FAIL: "true"
+        run: |
+          # Publish step fails at signing, not before
+          set -euo pipefail
+          python3 -E -s src/main.py publish | tee /tmp/publish.log
+          fail=0
+          if ! grep -q 'Installing boto3 (hash pinned)' /tmp/publish.log; then
+            echo "Error: the run time boto3 install did not run ❌"
+            fail=1
+          fi
+          if grep -q 'cannot create a client' /tmp/publish.log; then
+            echo "Error: boto3 install or client creation failed ❌"
+            fail=1
+          fi
+          if ! grep -q 'NoCredentialsError' /tmp/publish.log; then
+            echo "Error: uploads did not fail on missing credentials ❌"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+          echo "Uploads reached signing and failed there ✅"
+
+      # The same run through the composite action: permit_fail must turn
+      # that failure into a successful step.
       - name: "Running local action: permit_fail tolerates upload errors"
         id: tolerated
         uses: $/
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
         with:
           s3_bucket: "logs-example-org"
           namespace: "gha-test"
           archive_patterns: "target/SFT/**"
-          dry_run: true
+          include_sysinfo: false
           permit_fail: true
 
-      - name: "Error if tolerated step did NOT succeed"
-        if: steps.tolerated.outcome != 'success'
+      - name: "Verify permit_fail tolerated the failure"
+        shell: bash
+        env:
+          OUTCOME: "${{ steps.tolerated.outcome }}"
+          FILE_COUNT: "${{ steps.tolerated.outputs.file_count }}"
+          UPLOAD_COUNT: "${{ steps.tolerated.outputs.upload_count }}"
+          FAILED_COUNT: "${{ steps.tolerated.outputs.failed_count }}"
+        run: |
+          # Verify permit_fail tolerated the failure
+          set -euo pipefail
+          if [ "$OUTCOME" != 'success' ]; then
+            echo "Error: permit_fail did not tolerate the failure ❌"
+            exit 1
+          fi
+          # Every collected file must have been attempted and failed;
+          # anything else means the leg did not test what it claims.
+          if [ "${FAILED_COUNT:-0}" -lt 1 ] \
+            || [ "$FAILED_COUNT" != "$FILE_COUNT" ] \
+            || [ "${UPLOAD_COUNT:-1}" != '0' ]; then
+            echo "Error: expected every upload to fail, got" \
+              "$FAILED_COUNT of $FILE_COUNT failed," \
+              "$UPLOAD_COUNT uploaded ❌"
+            exit 1
+          fi
+          echo "permit_fail tolerated $FAILED_COUNT failed upload(s) ✅"
+
+      # The same failure with permit_fail off must fail the step, which
+      # proves the flag, and not a silent success, decided the leg above.
+      - name: "Running local action: permit_fail off surfaces upload errors"
+        id: strict
+        uses: $/
+        continue-on-error: true
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+        with:
+          s3_bucket: "logs-example-org"
+          namespace: "gha-test"
+          archive_patterns: "target/SFT/**"
+          include_sysinfo: false
+          permit_fail: false
+
+      - name: "Error if strict step did NOT fail"
+        if: steps.strict.outcome != 'failure'
         shell: bash
         run: |
-          # Error if tolerated step did NOT succeed
-          echo "Error: permit_fail did not tolerate the failure ❌"
+          # Error if strict step did NOT fail
+          echo "Error: permit_fail false did not fail the step ❌"
           exit 1
 
       # yamllint disable-line rule:line-length
