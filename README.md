@@ -285,20 +285,24 @@ compression stages all keep working; the hand-off alone moves.
 | `dry_run`                    | No       | `false`             | Collect and build the manifest, but make no S3 or R2 calls         |
 | `permit_fail`                | No       | `true`              | Do not fail the step when publishing fails                         |
 
+<!-- markdownlint-enable MD013 -->
+
 ## Outputs
 
-| Output          | Description                                          |
-| --------------- | ---------------------------------------------------- |
-| `s3_path`       | Resolved path within the bucket                      |
-| `log_url`       | Public URL on the first listed remote destination    |
-| `s3_log_url`    | Public URL of the S3 copy, empty when not published  |
-| `r2_log_url`    | Public URL of the R2 copy, empty when not published  |
-| `file_count`    | Number of files collected                            |
-| `upload_count`  | Files uploaded, summed across S3 and R2              |
-| `failed_count`  | Number of files that failed to upload                |
-| `manifest_path` | Path to the generated upload manifest                |
-| `staging_dir`   | Staged tree, when the artifact destination is in use |
-| `artifact_name` | Name of the uploaded artifact, empty when none       |
+<!-- markdownlint-disable MD013 -->
+
+| Output          | Description                                                                           |
+| --------------- | ------------------------------------------------------------------------------------- |
+| `s3_path`       | Resolved path within the bucket                                                       |
+| `log_url`       | Public URL on the first listed remote destination                                     |
+| `s3_log_url`    | Public URL of the S3 copy, empty when not published                                   |
+| `r2_log_url`    | Public URL of the R2 copy, empty when not published                                   |
+| `file_count`    | Number of files collected                                                             |
+| `upload_count`  | Files uploaded, summed across S3 and R2                                               |
+| `failed_count`  | Number of files that failed to upload                                                 |
+| `manifest_path` | Path to the generated upload manifest                                                 |
+| `staging_dir`   | Staged tree under `RUNNER_TEMP`, kept for the artifact upload step or after a dry run |
+| `artifact_name` | Name of the uploaded artifact, empty when none                                        |
 
 <!-- markdownlint-enable MD013 -->
 

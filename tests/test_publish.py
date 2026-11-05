@@ -61,7 +61,6 @@ class TestArtifact:
         assert (result.staging / "karaf.log").is_file()
         assert "Workflow artifact: `build-logs`" in result.summary
 
-    @pytest.mark.xfail(strict=True, reason="staging still uses the system temp")
     @pytest.mark.parametrize(
         "env",
         [
@@ -95,6 +94,10 @@ class TestArtifact:
         assert result.outputs["artifact_name"] == ""
         assert result.outputs["staging_dir"] == ""
         assert list((tmp_path / "tmp").iterdir()) == []
+        # Only the manifest stays behind in RUNNER_TEMP.
+        assert [p.name for p in (tmp_path / "runner_temp").iterdir()] == [
+            "log-publish-manifest.tsv"
+        ]
 
 
 class TestR2Index:

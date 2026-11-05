@@ -233,8 +233,9 @@ outputs:
     value: "${{ steps.publish.outputs.manifest_path }}"
   staging_dir:
     description: >-
-      Directory holding the staged tree. Populated when the artifact
-      destination is in use, or after a dry run, and empty otherwise.
+      Directory under RUNNER_TEMP holding the staged tree. Populated when
+      the artifact destination is in use, or after a dry run, and empty
+      otherwise.
     value: "${{ steps.publish.outputs.staging_dir }}"
   artifact_name:
     description: 'Name of the uploaded artifact, empty when none was uploaded'
