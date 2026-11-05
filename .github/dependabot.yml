@@ -47,6 +47,18 @@ updates:
           - "boto3"
           - "botocore"
           - "s3transfer"
+    # botocore caps its transitive dependencies below the next major
+    # (jmespath<2, python-dateutil<3, urllib3<3). Dependabot bumps each
+    # pin on its own and does not resolve across lines, so a major bump
+    # of one of these fails the CI resolution check until botocore
+    # follows. Drop the entry here once botocore raises its cap.
+    ignore:
+      - dependency-name: "jmespath"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "python-dateutil"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "urllib3"
+        update-types: ["version-update:semver-major"]
 
   # uv.lock pins the development tools only. The runtime packages are
   # ignored here so the uv ecosystem, which also reads requirements
