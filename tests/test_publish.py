@@ -273,8 +273,6 @@ class TestUploads:
         assert result.outputs["failed_count"] == "1"
         assert "::error::s3: failed to upload karaf.log" in result.stdout
         assert "(permit_fail)" in result.stdout
-        # A failed upload leaves the server listing alone.
-        assert stores.keys("s3", "put") == []
         # Two sleeps per failing file: none after the last attempt.
         assert run.sleeps == [4, 6]
         assert "- S3 uploaded: " in result.summary
@@ -286,7 +284,6 @@ class TestUploads:
         result = self.dual(run, workspace, stores, "s3", INPUT_PERMIT_FAIL="false")
         assert result.status == 1
 
-    @pytest.mark.xfail(strict=True, reason="markers still need a clean upload")
     def test_partial_failure_refreshes_markers(
         self, run: Runner, workspace: Path, stores: Stores
     ) -> None:

@@ -340,6 +340,11 @@ the hierarchy unbrowsable, so the action rejects one. Setting
 `index_markers` to `false` lifts the rule, and the action then accepts a
 path of any depth.
 
+The markers follow every run that uploaded at least one object, so a
+partial failure still refreshes the listing for the files that did
+arrive; `failed_count` and the step summary report the ones that did
+not. A run that uploaded nothing writes no markers.
+
 ## Deviations From The Jenkins Behaviour
 
 This action differs from `lftools deploy s3` in three places by design.
