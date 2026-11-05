@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Generator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.client import HTTPException, HTTPMessage, HTTPResponse
 from pathlib import Path
 from typing import IO, cast
@@ -112,7 +112,7 @@ def build_details(cfg: Config) -> str:
     server = env.get("GITHUB_SERVER_URL") or "https://github.com"
     repo = env.get("GITHUB_REPOSITORY", "")
     run_id = env.get("GITHUB_RUN_ID", "")
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = [
         ("build-url", f"{server}/{repo}/actions/runs/{run_id}"),
         ("repository", repo),

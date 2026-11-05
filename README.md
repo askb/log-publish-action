@@ -456,10 +456,13 @@ callers need `secrets: inherit` or explicit secret mappings.
 
 ### Tooling
 
-The action runs on the runner's own `python3`, version 3.10 or later,
-with `pip`. GitHub-hosted Ubuntu runners have both; self-hosted runners
-may need them installed. The action validates this before it does any
-work, and needs no `setup-python` step.
+The action runs on the runner's own `python3`, version 3.11 or later,
+with `pip`. GitHub-hosted `ubuntu-24.04` runners (`ubuntu-latest`) have
+both and need no `setup-python` step. `ubuntu-22.04` ships
+Python 3.10, which is end of life and no longer supported: on that
+image, and on a self-hosted runner without a recent Python, run
+`actions/setup-python` with 3.11 or later before this action. The
+action validates the interpreter before it does any work.
 
 Uploads to S3 or R2 use boto3, which the action installs at run time
 from the hash-pinned `requirements.txt` into the runner temp directory.
@@ -493,7 +496,7 @@ and intercept each request before it leaves the process, proving which
 endpoint, credentials and headers each store receives, and that S3 and
 R2 never share credentials.
 
-CI runs the suite on every supported Python, 3.10 to 3.15. To run it
+CI runs the suite on every supported Python, 3.11 to 3.15. To run it
 locally on a given version, pass it to `uv sync`:
 
 ```shell

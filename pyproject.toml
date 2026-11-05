@@ -21,7 +21,7 @@ name = "log-publish-action"
 version = "0.0.0"
 description = "Publishes build logs to S3, Cloudflare R2 or workflow artifacts"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = []
 
@@ -43,7 +43,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 mypy_path = "src"
 # boto3 is loaded at run time from a hash pinned install, so the
 # isolated pre-commit environment has neither it nor its stubs.
@@ -51,10 +51,10 @@ ignore_missing_imports = true
 
 [tool.basedpyright]
 # The floor action.yaml enforces.
-pythonVersion = "3.10"
+pythonVersion = "3.11"
 pythonPlatform = "All"
 typeCheckingMode = "recommended"
 include = ["src", "tests"]
 extraPaths = ["src", "."]
-# typing.override needs Python 3.12; the floor is 3.10.
+# typing.override needs Python 3.12; the floor is 3.11.
 reportImplicitOverride = false
