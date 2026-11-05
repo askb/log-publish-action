@@ -124,10 +124,52 @@ def test_rejects(env: dict[str, str], message: str) -> None:
             "r2_access_key_id": "k",
             "r2_secret_access_key": "s",
         },
+        # The limits upload-artifact applies, on a public repository.
+        {
+            "destination": "artifact",
+            "artifact_retention_days": "90",
+            "artifact_if_no_files_found": "ignore",
+        },
+        {"destination": "artifact", "artifact_retention_days": "1"},
     ],
 )
 def test_accepts(env: dict[str, str]) -> None:
     assert check(**env) == ""
+
+
+@pytest.mark.xfail(strict=True, reason="artifact inputs are not validated yet")
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        (
+            {"artifact_retention_days": "0"},
+            "artifact_retention_days must be empty or 1 to 90, got '0' ❌",
+        ),
+        (
+            {"artifact_retention_days": "91"},
+            "artifact_retention_days must be empty or 1 to 90, got '91' ❌",
+        ),
+        (
+            {"artifact_retention_days": "ten"},
+            "artifact_retention_days must be empty or 1 to 90, got 'ten' ❌",
+        ),
+        (
+            {"artifact_if_no_files_found": "fail"},
+            "artifact_if_no_files_found must be warn, error or ignore,"
+            + " got 'fail' ❌",
+        ),
+        (
+            {"artifact_if_no_files_found": "Warn"},
+            "artifact_if_no_files_found must be warn, error or ignore,"
+            + " got 'Warn' ❌",
+        ),
+    ],
+)
+def test_rejects_artifact_inputs(env: dict[str, str], message: str) -> None:
+    # Like the boolean flags, these are checked whatever the destination:
+    # a typo should not wait for the day the artifact destination is on.
+    assert check(s3_bucket="logs-example-org", dry_run="true", **env) == message
+    assert check(destination="artifact", **env) == message
 
 
 @pytest.mark.parametrize(
