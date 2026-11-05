@@ -285,20 +285,24 @@ compression stages all keep working; the hand-off alone moves.
 | `dry_run`                    | No       | `false`             | Collect and build the manifest, but make no S3 or R2 calls         |
 | `permit_fail`                | No       | `true`              | Do not fail the step when publishing fails                         |
 
+<!-- markdownlint-enable MD013 -->
+
 ## Outputs
 
-| Output          | Description                                          |
-| --------------- | ---------------------------------------------------- |
-| `s3_path`       | Resolved path within the bucket                      |
-| `log_url`       | Public URL on the first listed remote destination    |
-| `s3_log_url`    | Public URL of the S3 copy, empty when not published  |
-| `r2_log_url`    | Public URL of the R2 copy, empty when not published  |
-| `file_count`    | Number of files collected                            |
-| `upload_count`  | Files uploaded, summed across S3 and R2              |
-| `failed_count`  | Number of files that failed to upload                |
-| `manifest_path` | Path to the generated upload manifest                |
-| `staging_dir`   | Staged tree, when the artifact destination is in use |
-| `artifact_name` | Name of the uploaded artifact, empty when none       |
+<!-- markdownlint-disable MD013 -->
+
+| Output          | Description                                                                           |
+| --------------- | ------------------------------------------------------------------------------------- |
+| `s3_path`       | Resolved path within the bucket                                                       |
+| `log_url`       | Public URL on the first listed remote destination                                     |
+| `s3_log_url`    | Public URL of the S3 copy, empty when not published                                   |
+| `r2_log_url`    | Public URL of the R2 copy, empty when not published                                   |
+| `file_count`    | Number of files collected                                                             |
+| `upload_count`  | Files uploaded, summed across S3 and R2                                               |
+| `failed_count`  | Number of files that failed to upload                                                 |
+| `manifest_path` | Path to the generated upload manifest                                                 |
+| `staging_dir`   | Staged tree under `RUNNER_TEMP`, kept for the artifact upload step or after a dry run |
+| `artifact_name` | Name of the uploaded artifact, empty when none                                        |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -335,6 +339,11 @@ segments to trigger that regeneration. A shallower path leaves parts of
 the hierarchy unbrowsable, so the action rejects one. Setting
 `index_markers` to `false` lifts the rule, and the action then accepts a
 path of any depth.
+
+The markers follow every run that uploaded at least one object, so a
+partial failure still refreshes the listing for the files that did
+arrive; `failed_count` and the step summary report the ones that did
+not. A run that uploaded nothing writes no markers.
 
 ## Deviations From The Jenkins Behaviour
 
@@ -456,10 +465,13 @@ callers need `secrets: inherit` or explicit secret mappings.
 
 ### Tooling
 
-The action runs on the runner's own `python3`, version 3.10 or later,
-with `pip`. GitHub-hosted Ubuntu runners have both; self-hosted runners
-may need them installed. The action validates this before it does any
-work, and needs no `setup-python` step.
+The action runs on the runner's own `python3`, version 3.11 or later,
+with `pip`. GitHub-hosted `ubuntu-24.04` runners (`ubuntu-latest`) have
+both and need no `setup-python` step. `ubuntu-22.04` ships
+Python 3.10, which is end of life and no longer supported: on that
+image, and on a self-hosted runner without a recent Python, run
+`actions/setup-python` with 3.11 or later before this action. The
+action validates the interpreter before it does any work.
 
 Uploads to S3 or R2 use boto3, which the action installs at run time
 from the hash-pinned `requirements.txt` into the runner temp directory.
@@ -493,7 +505,7 @@ and intercept each request before it leaves the process, proving which
 endpoint, credentials and headers each store receives, and that S3 and
 R2 never share credentials.
 
-CI runs the suite on every supported Python, 3.10 to 3.15. To run it
+CI runs the suite on every supported Python, 3.11 to 3.15. To run it
 locally on a given version, pass it to `uv sync`:
 
 ```shell

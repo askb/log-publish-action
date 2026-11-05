@@ -233,8 +233,9 @@ outputs:
     value: "${{ steps.publish.outputs.manifest_path }}"
   staging_dir:
     description: >-
-      Directory holding the staged tree. Populated when the artifact
-      destination is in use, or after a dry run, and empty otherwise.
+      Directory under RUNNER_TEMP holding the staged tree. Populated when
+      the artifact destination is in use, or after a dry run, and empty
+      otherwise.
     value: "${{ steps.publish.outputs.staging_dir }}"
   artifact_name:
     description: 'Name of the uploaded artifact, empty when none was uploaded'
@@ -263,6 +264,9 @@ runs:
         INPUT_R2_ACCESS_KEY_ID: "${{ inputs.r2_access_key_id }}"
         INPUT_R2_SECRET_ACCESS_KEY: "${{ inputs.r2_secret_access_key }}"
         INPUT_R2_INDEX: "${{ inputs.r2_index }}"
+        INPUT_ARTIFACT_RETENTION_DAYS: "${{ inputs.artifact_retention_days }}"
+        # yamllint disable-line rule:line-length
+        INPUT_ARTIFACT_IF_NO_FILES_FOUND: "${{ inputs.artifact_if_no_files_found }}"
         INPUT_GITHUB_TOKEN: "${{ inputs.github_token }}"
         INPUT_DRY_RUN: "${{ inputs.dry_run }}"
         INPUT_PERMIT_FAIL: "${{ inputs.permit_fail }}"
@@ -272,9 +276,9 @@ runs:
       # main.py keeps -E -s: -I would also drop the script's own
       # directory (the action's src/) from sys.path.
       run: |
-        if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 10))'
+        if ! python3 -I -c 'import sys; sys.exit(sys.version_info < (3, 11))'
         then
-          echo "::error::log-publish-action needs python3 >= 3.10 on PATH"
+          echo "::error::log-publish-action needs python3 >= 3.11 on PATH"
           exit 1
         fi
         python3 -E -s "$GITHUB_ACTION_PATH/src/main.py" validate

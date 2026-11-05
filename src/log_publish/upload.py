@@ -289,6 +289,9 @@ def publish_target(
         return Result(failed=len(entries) + len(pages))
     publisher = Publisher(name, bucket, s3_path, client, sleep)
     result = publisher.upload_all(staged.staging, entries, pages)
-    if name == "s3" and cfg.index_markers == "true" and result.failed == 0:
+    # Whatever arrived is browsable only once the server regenerates the
+    # listing, so a partial failure still refreshes it; with nothing
+    # uploaded there is nothing new for a listing to show.
+    if name == "s3" and cfg.index_markers == "true" and result.uploaded > 0:
         publisher.refresh_index_markers()
     return result

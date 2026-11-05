@@ -6,8 +6,8 @@ The shell version expanded these with bash under globstar, dotglob and
 nullglob, and callers' patterns rely on that. The standard library
 cannot reproduce it:
 
-- glob.glob and Path.glob only match hidden files with include_hidden,
-  which needs Python 3.11; the action supports 3.10.
+- glob.glob only matches hidden files with include_hidden, and
+  Path.glob has no such switch.
 - Both follow directory symlinks while expanding "**". A symlink in the
   build tree could then pull files from outside the workspace into the
   published logs. Bash globstar does not follow them, and neither does

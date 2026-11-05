@@ -60,7 +60,11 @@ def run(
     if dest.artifact:
         info(f"Publishing as workflow artifact (destination: {cfg.destination})")
 
-    staging = Path(tempfile.mkdtemp(prefix="log-publish."))
+    # The runner wipes RUNNER_TEMP between jobs, so a tree kept there for
+    # inspection or for the upload step cannot pile up on a self hosted
+    # runner the way one in the system temp directory would.
+    runner_temp = Path(cfg.env.get("RUNNER_TEMP") or tempfile.gettempdir())
+    staging = Path(tempfile.mkdtemp(prefix="log-publish.", dir=runner_temp))
     index_dir = Path(f"{staging}.index")
     keep_staging = dry_run or dest.artifact
     try:
@@ -106,8 +110,7 @@ def run(
     uploaded = sum(r.uploaded for r in results.values())
     failed = sum(r.failed for r in results.values())
 
-    runner_temp = cfg.env.get("RUNNER_TEMP") or "/tmp"
-    manifest_path = Path(runner_temp) / "log-publish-manifest.tsv"
+    manifest_path = runner_temp / "log-publish-manifest.tsv"
     try:
         _ = manifest_path.write_text(
             "".join(f"{e.row()}\n" for e in entries), encoding="utf-8"

@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import NoReturn
 
+import pytest
+
 from log_publish.config import Config
 from log_publish.publish import write_outputs
 from tests.conftest import DERIVED, R2_ENV, Run, Runner, Stores
@@ -59,6 +61,23 @@ class TestArtifact:
         assert (result.staging / "karaf.log").is_file()
         assert "Workflow artifact: `build-logs`" in result.summary
 
+    @pytest.mark.parametrize(
+        "env",
+        [
+            {"INPUT_DESTINATION": "artifact", "INPUT_DRY_RUN": "false"},
+            {"INPUT_DRY_RUN": "true"},
+        ],
+    )
+    def test_kept_tree_lives_in_runner_temp(
+        self, run: Runner, workspace: Path, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # The runner clears RUNNER_TEMP between jobs; the system temp of
+        # a self hosted runner is nobody's to clear.
+        result = run(workspace, **env)
+        assert result.staging.parent == tmp_path / "runner_temp"
+        assert result.staging.name.startswith("log-publish.")
+        assert not list((tmp_path / "tmp").iterdir())
+
     def test_custom_name(self, run: Runner, workspace: Path) -> None:
         result = run(
             workspace,
@@ -75,6 +94,10 @@ class TestArtifact:
         assert result.outputs["artifact_name"] == ""
         assert result.outputs["staging_dir"] == ""
         assert list((tmp_path / "tmp").iterdir()) == []
+        # Only the manifest stays behind in RUNNER_TEMP.
+        assert [p.name for p in (tmp_path / "runner_temp").iterdir()] == [
+            "log-publish-manifest.tsv"
+        ]
 
 
 class TestR2Index:
@@ -250,8 +273,6 @@ class TestUploads:
         assert result.outputs["failed_count"] == "1"
         assert "::error::s3: failed to upload karaf.log" in result.stdout
         assert "(permit_fail)" in result.stdout
-        # A failed upload leaves the server listing alone.
-        assert stores.keys("s3", "put") == []
         # Two sleeps per failing file: none after the last attempt.
         assert run.sleeps == [4, 6]
         assert "- S3 uploaded: " in result.summary
@@ -262,6 +283,31 @@ class TestUploads:
         store.fail = lambda key: key.endswith("karaf.log")
         result = self.dual(run, workspace, stores, "s3", INPUT_PERMIT_FAIL="false")
         assert result.status == 1
+
+    def test_partial_failure_refreshes_markers(
+        self, run: Runner, workspace: Path, stores: Stores
+    ) -> None:
+        store = stores.factory("s3", Config())
+        store.fail = lambda key: key.endswith("karaf.log")
+        result = self.dual(run, workspace, stores, "s3")
+        assert result.outputs["failed_count"] == "1"
+        assert int(result.outputs["upload_count"]) > 0
+        # The objects that did arrive are browsable only once the server
+        # regenerates the listing, so one lost file must not hide the rest.
+        markers = ["logs/_tmpfile", "logs/gha/_tmpfile", "logs/gha/yangtools/_tmpfile"]
+        assert stores.keys("s3", "put") == markers
+        assert stores.keys("s3", "delete") == markers
+
+    def test_total_failure_leaves_listing_alone(
+        self, run: Runner, workspace: Path, stores: Stores
+    ) -> None:
+        store = stores.factory("s3", Config())
+        store.fail = lambda _key: True
+        result = self.dual(run, workspace, stores, "s3")
+        assert result.outputs["upload_count"] == "0"
+        assert result.outputs["failed_count"] == result.outputs["file_count"]
+        # Nothing arrived, so there is nothing for a new listing to show.
+        assert stores.keys("s3", "put") == []
 
     def test_client_error_counts_as_failure(self, run: Runner, workspace: Path) -> None:
         def broken(_name: str, _cfg: Config) -> NoReturn:
