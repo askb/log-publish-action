@@ -49,8 +49,9 @@ output — become durable, linkable URLs.
 
 The examples pin the action to a commit SHA, with the release tag as a
 trailing comment, as the organisation requires for remote `uses:`
-references. Dependabot's `github-actions` ecosystem keeps such pins
-current and rewrites the comment with each bump.
+references. When configured in a consuming repository, Dependabot's
+`github-actions` ecosystem keeps workflow pins and their release-tag
+comments current. These README examples require separate updates.
 
 ### Basic
 
