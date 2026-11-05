@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import NoReturn
 
+import pytest
+
 from log_publish.config import Config
 from log_publish.publish import write_outputs
 from tests.conftest import DERIVED, R2_ENV, Run, Runner, Stores
@@ -58,6 +60,24 @@ class TestArtifact:
         # The composite upload step owns this tree from here.
         assert (result.staging / "karaf.log").is_file()
         assert "Workflow artifact: `build-logs`" in result.summary
+
+    @pytest.mark.xfail(strict=True, reason="staging still uses the system temp")
+    @pytest.mark.parametrize(
+        "env",
+        [
+            {"INPUT_DESTINATION": "artifact", "INPUT_DRY_RUN": "false"},
+            {"INPUT_DRY_RUN": "true"},
+        ],
+    )
+    def test_kept_tree_lives_in_runner_temp(
+        self, run: Runner, workspace: Path, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        # The runner clears RUNNER_TEMP between jobs; the system temp of
+        # a self hosted runner is nobody's to clear.
+        result = run(workspace, **env)
+        assert result.staging.parent == tmp_path / "runner_temp"
+        assert result.staging.name.startswith("log-publish.")
+        assert not list((tmp_path / "tmp").iterdir())
 
     def test_custom_name(self, run: Runner, workspace: Path) -> None:
         result = run(
