@@ -286,6 +286,32 @@ class TestUploads:
         result = self.dual(run, workspace, stores, "s3", INPUT_PERMIT_FAIL="false")
         assert result.status == 1
 
+    @pytest.mark.xfail(strict=True, reason="markers still need a clean upload")
+    def test_partial_failure_refreshes_markers(
+        self, run: Runner, workspace: Path, stores: Stores
+    ) -> None:
+        store = stores.factory("s3", Config())
+        store.fail = lambda key: key.endswith("karaf.log")
+        result = self.dual(run, workspace, stores, "s3")
+        assert result.outputs["failed_count"] == "1"
+        assert int(result.outputs["upload_count"]) > 0
+        # The objects that did arrive are browsable only once the server
+        # regenerates the listing, so one lost file must not hide the rest.
+        markers = ["logs/_tmpfile", "logs/gha/_tmpfile", "logs/gha/yangtools/_tmpfile"]
+        assert stores.keys("s3", "put") == markers
+        assert stores.keys("s3", "delete") == markers
+
+    def test_total_failure_leaves_listing_alone(
+        self, run: Runner, workspace: Path, stores: Stores
+    ) -> None:
+        store = stores.factory("s3", Config())
+        store.fail = lambda _key: True
+        result = self.dual(run, workspace, stores, "s3")
+        assert result.outputs["upload_count"] == "0"
+        assert result.outputs["failed_count"] == result.outputs["file_count"]
+        # Nothing arrived, so there is nothing for a new listing to show.
+        assert stores.keys("s3", "put") == []
+
     def test_client_error_counts_as_failure(self, run: Runner, workspace: Path) -> None:
         def broken(_name: str, _cfg: Config) -> NoReturn:
             raise RuntimeError("pip install failed")
